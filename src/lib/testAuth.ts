@@ -256,8 +256,8 @@ export function registerUser(email: string, password: string): { success: boolea
 }
 
 /**
- * Safely fetches server test data and merges bidirectionally.
- * Never drops local or server attempts!
+ * Centralized Synchronization and State Fetching
+ * Merges local and server accounts bidirectionally so all systems and admins share one master directory.
  */
 export async function fetchServerTestData(): Promise<{
   users: UsersMap;
@@ -283,48 +283,57 @@ export async function fetchServerTestData(): Promise<{
     }
   }
 
-  // 2. Fetch server data
+  // 2. Centralized Master Sync: push local state and pull authoritative merged state
   try {
-    const res = await fetch('/api/test/data');
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data && data.success) {
-      // Bidirectional merge of users
-      const localUsers = loadUsers();
-      const mergedUsers = { ...localUsers, ...(data.users || {}) };
-      saveUsers(mergedUsers);
+    const localUsers = loadUsers();
+    const localAttempts = loadAttempts();
+    const localAuth = loadAuthorizedUsers();
 
-      // Bidirectional merge of attempts by unique ID / timestamp
-      const localAttempts = loadAttempts();
-      const attemptMap = new Map<string, LoginAttempt>();
+    const res = await fetch('/api/test/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        users: localUsers,
+        attempts: localAttempts,
+        authorizedUsers: localAuth,
+      }),
+    });
 
-      for (const att of localAttempts) {
-        attemptMap.set(att.id || `${att.time}_${att.email}`, att);
-      }
-      if (Array.isArray(data.attempts)) {
-        for (const att of data.attempts) {
-          attemptMap.set(att.id || `${att.time}_${att.email}`, att);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        if (data.users && typeof data.users === 'object') {
+          saveUsers(data.users);
         }
+        if (Array.isArray(data.attempts)) {
+          saveAttempts(data.attempts);
+        }
+        if (Array.isArray(data.authorizedUsers)) {
+          saveAuthorizedUsers(data.authorizedUsers);
+        }
+
+        return {
+          users: data.users || loadUsers(),
+          attempts: data.attempts || loadAttempts(),
+          authorizedUsers: data.authorizedUsers || loadAuthorizedUsers(),
+        };
       }
-
-      const mergedAttempts = Array.from(attemptMap.values()).sort(
-        (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()
-      );
-      saveAttempts(mergedAttempts);
-
-      // Authorized users
-      if (Array.isArray(data.authorizedUsers)) {
-        saveAuthorizedUsers(data.authorizedUsers);
-      }
-
-      return {
-        users: mergedUsers,
-        attempts: mergedAttempts,
-        authorizedUsers: loadAuthorizedUsers(),
-      };
     }
   } catch (err) {
-    // Offline or server restart
+    // If sync endpoint fails or is restarting, fallback to GET /api/test/data
+    try {
+      const getRes = await fetch('/api/test/data');
+      if (getRes.ok) {
+        const getData = await getRes.json();
+        if (getData && getData.success) {
+          return {
+            users: getData.users || loadUsers(),
+            attempts: getData.attempts || loadAttempts(),
+            authorizedUsers: getData.authorizedUsers || loadAuthorizedUsers(),
+          };
+        }
+      }
+    } catch {}
   }
 
   return {
@@ -332,6 +341,97 @@ export async function fetchServerTestData(): Promise<{
     attempts: loadAttempts(),
     authorizedUsers: loadAuthorizedUsers(),
   };
+}
+
+/**
+ * Synchronize with another instance URL (e.g. shared app URL or dev app URL)
+ */
+export async function syncWithRemoteInstance(remoteUrl: string): Promise<{
+  success: boolean;
+  message: string;
+  totalUsers?: number;
+  totalAttempts?: number;
+}> {
+  try {
+    const res = await fetch('/api/test/peer-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remoteUrl }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      if (data.users) saveUsers(data.users);
+      if (data.attempts) saveAttempts(data.attempts);
+      if (data.authorizedUsers) saveAuthorizedUsers(data.authorizedUsers);
+      return {
+        success: true,
+        message: data.message || 'Synced successfully',
+        totalUsers: data.totalUsers,
+        totalAttempts: data.totalAttempts,
+      };
+    }
+    return { success: false, message: data.message || 'Failed to sync with remote instance' };
+  } catch (err) {
+    return { success: false, message: String(err) };
+  }
+}
+
+/**
+ * Export complete registry as JSON
+ */
+export function exportMasterDataJson(): string {
+  const users = loadUsers();
+  const attempts = loadAttempts();
+  const authorizedUsers = loadAuthorizedUsers();
+  return JSON.stringify(
+    {
+      exportedAt: new Date().toISOString(),
+      sourceOrigin: typeof window !== 'undefined' ? window.location.origin : '',
+      users,
+      attempts,
+      authorizedUsers,
+    },
+    null,
+    2
+  );
+}
+
+/**
+ * Import and merge external JSON registry into master centralized server
+ */
+export async function importAndMergeMasterDataJson(jsonString: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const parsed = JSON.parse(jsonString);
+    if (!parsed || typeof parsed !== 'object') {
+      return { success: false, message: 'Invalid JSON format' };
+    }
+    const usersToMerge = parsed.users || {};
+    const attemptsToMerge = Array.isArray(parsed.attempts) ? parsed.attempts : [];
+    const authToMerge = Array.isArray(parsed.authorizedUsers) ? parsed.authorizedUsers : [];
+
+    const res = await fetch('/api/test/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        users: usersToMerge,
+        attempts: attemptsToMerge,
+        authorizedUsers: authToMerge,
+      }),
+    });
+    const data = await res.json();
+    if (data && data.success) {
+      if (data.users) saveUsers(data.users);
+      if (data.attempts) saveAttempts(data.attempts);
+      if (data.authorizedUsers) saveAuthorizedUsers(data.authorizedUsers);
+      return {
+        success: true,
+        message: `Successfully unified: ${data.totalUsers} total accounts, ${data.totalAttempts} total log entries across all systems`,
+      };
+    }
+    return { success: false, message: data.message || 'Failed to merge master data' };
+  } catch (err) {
+    return { success: false, message: `Import error: ${String(err)}` };
+  }
 }
 
 export function addAuthorizedUser(email: string): { success: boolean; message: string } {

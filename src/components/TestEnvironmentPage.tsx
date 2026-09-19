@@ -21,7 +21,11 @@ import {
   RefreshCw,
   Infinity as InfinityIcon,
   Radio,
-  Zap
+  Zap,
+  Server,
+  Globe,
+  Download,
+  Upload
 } from 'lucide-react';
 import { 
   loadUsers, 
@@ -42,7 +46,10 @@ import {
   PRIMARY_ADMIN_EMAIL,
   AUTHORIZED_TEST_USERS_FILE,
   fetchServerTestData,
-  recordFunnelEvent
+  recordFunnelEvent,
+  syncWithRemoteInstance,
+  exportMasterDataJson,
+  importAndMergeMasterDataJson
 } from '../lib/testAuth';
 
 interface TestEnvironmentPageProps {
@@ -81,6 +88,15 @@ export function TestEnvironmentPage({
   const [newAccountEmail, setNewAccountEmail] = useState('');
   const [newAccountPassword, setNewAccountPassword] = useState('');
   const [showAddAccountForm, setShowAddAccountForm] = useState(false);
+
+  // Peer / Cross-Instance Sync state
+  const [remoteSyncUrl, setRemoteSyncUrl] = useState('https://ais-pre-spgaofsap4eoue5voc4mmc-122308163278.europe-west2.run.app');
+  const [isRemoteSyncing, setIsRemoteSyncing] = useState(false);
+  const [remoteSyncStatus, setRemoteSyncStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importJsonText, setImportJsonText] = useState('');
+  const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [copiedPayload, setCopiedPayload] = useState(false);
 
   const isCurrentAuthorized = isUserAuthorizedForTest(activeUserEmail);
 
@@ -239,6 +255,53 @@ export function TestEnvironmentPage({
   const handleResetDefaults = () => {
     resetUsersToDefault();
     refreshData();
+  };
+
+  const handlePeerSync = async (targetUrl?: string) => {
+    const url = (targetUrl || remoteSyncUrl).trim();
+    if (!url) return;
+    setIsRemoteSyncing(true);
+    setRemoteSyncStatus(null);
+    const result = await syncWithRemoteInstance(url);
+    if (result.success) {
+      setRemoteSyncStatus({ 
+        type: 'success', 
+        message: result.message || `Successfully synced: ${result.totalUsers} accounts unified!` 
+      });
+      await refreshData();
+    } else {
+      setRemoteSyncStatus({ 
+        type: 'error', 
+        message: result.message || 'Sync failed. Verify the URL is reachable.' 
+      });
+    }
+    setIsRemoteSyncing(false);
+    setTimeout(() => setRemoteSyncStatus(null), 6000);
+  };
+
+  const handleCopyMasterJson = () => {
+    const json = exportMasterDataJson();
+    navigator.clipboard.writeText(json);
+    setCopiedPayload(true);
+    setTimeout(() => setCopiedPayload(false), 2500);
+  };
+
+  const handleApplyImportJson = async () => {
+    if (!importJsonText.trim()) return;
+    setIsRemoteSyncing(true);
+    const res = await importAndMergeMasterDataJson(importJsonText);
+    if (res.success) {
+      setImportStatus({ type: 'success', message: res.message });
+      await refreshData();
+      setTimeout(() => {
+        setShowImportModal(false);
+        setImportJsonText('');
+        setImportStatus(null);
+      }, 2000);
+    } else {
+      setImportStatus({ type: 'error', message: res.message });
+    }
+    setIsRemoteSyncing(false);
   };
 
   const accountsList = Object.entries(users) as [string, string][];
@@ -556,6 +619,141 @@ export function TestEnvironmentPage({
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Section: Centralized Server Synchronization & Multi-Admin Pipeline */}
+        <section className="bg-gradient-to-br from-[#1E293B] to-slate-900 border border-indigo-500/30 rounded-lg overflow-hidden shadow-xl">
+          <div className="px-6 py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-indigo-950/20">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-indigo-500/10 rounded-lg border border-indigo-500/20 text-indigo-400">
+                <Server size={18} />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2">
+                  <span>Centralized Server Synchronization</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                    Unified Active
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Synchronizes all accounts and login telemetry across all systems, devices, and multiple admins into one central database.
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopyMasterJson}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded border border-slate-700 transition-colors cursor-pointer"
+                title="Export full registry JSON to clipboard"
+              >
+                {copiedPayload ? <Check size={14} className="text-emerald-400" /> : <Download size={14} className="text-indigo-400" />}
+                <span>{copiedPayload ? 'Copied Full JSON!' : 'Export JSON'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowImportModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded shadow transition-colors cursor-pointer"
+                title="Paste and merge accounts from another system"
+              >
+                <Upload size={14} />
+                <span>Import &amp; Merge</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="p-6 space-y-4">
+            {/* Quick sync options */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <div className="text-xs font-semibold text-white flex items-center gap-2">
+                    <Globe size={14} className="text-blue-400" />
+                    <span>Cross-System Peer Sync (Direct URL Bridge)</span>
+                  </div>
+                  <div className="text-[12px] text-slate-400 mt-1 max-w-xl">
+                    Connects this system with another system (e.g. Shared Preview URL vs Dev App URL) and merges all captured accounts bidirectionally.
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    disabled={isRemoteSyncing}
+                    onClick={() => handlePeerSync('https://ais-pre-spgaofsap4eoue5voc4mmc-122308163278.europe-west2.run.app')}
+                    className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium rounded transition-colors cursor-pointer"
+                  >
+                    <RefreshCw size={13} className={isRemoteSyncing ? 'animate-spin' : ''} />
+                    <span>Sync Shared App URL</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isRemoteSyncing}
+                    onClick={() => handlePeerSync('https://ais-dev-spgaofsap4eoue5voc4mmc-122308163278.europe-west2.run.app')}
+                    className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 text-xs font-medium rounded transition-colors cursor-pointer"
+                  >
+                    <RefreshCw size={13} className={isRemoteSyncing ? 'animate-spin' : ''} />
+                    <span>Sync Dev URL</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Custom URL Input */}
+              <div className="mt-3 pt-3 border-t border-slate-800/80 flex flex-wrap sm:flex-nowrap items-center gap-2">
+                <input
+                  type="url"
+                  value={remoteSyncUrl}
+                  onChange={(e) => setRemoteSyncUrl(e.target.value)}
+                  placeholder="https://... (Remote instance URL to synchronize with)"
+                  className="flex-1 bg-slate-950 border border-slate-700/80 rounded px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+                <button
+                  type="button"
+                  disabled={isRemoteSyncing || !remoteSyncUrl.trim()}
+                  onClick={() => handlePeerSync(remoteSyncUrl)}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium rounded transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  {isRemoteSyncing ? 'Syncing...' : 'Sync Custom URL'}
+                </button>
+              </div>
+
+              {remoteSyncStatus && (
+                <div className={`mt-3 text-xs p-2.5 rounded border flex items-center gap-2 ${
+                  remoteSyncStatus.type === 'success'
+                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                    : 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+                }`}>
+                  {remoteSyncStatus.type === 'success' ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+                  <span>{remoteSyncStatus.message}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Multi-Admin Info Strip */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3">
+                <div className="text-[11px] text-slate-400 font-medium">Master Server Status</div>
+                <div className="text-sm font-semibold text-emerald-400 mt-1 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>Centralized &amp; Authoritative</span>
+                </div>
+              </div>
+              <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3">
+                <div className="text-[11px] text-slate-400 font-medium">Multi-Admin Synchronized</div>
+                <div className="text-sm font-semibold text-white mt-1">
+                  {authorizedUsers.length} Admin{authorizedUsers.length === 1 ? '' : 's'} with Full Access
+                </div>
+              </div>
+              <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3">
+                <div className="text-[11px] text-slate-400 font-medium">Consolidated Accounts</div>
+                <div className="text-sm font-semibold text-blue-400 mt-1">
+                  {Object.keys(users).length} Accounts across all systems
+                </div>
               </div>
             </div>
           </div>
@@ -1006,8 +1204,83 @@ export function TestEnvironmentPage({
 
       {/* Footer info */}
       <footer className="border-t border-slate-800 py-4 px-6 text-center text-xs text-slate-500">
-        Test Environment (/test) • Unlimited Capacity • Live Funnel Active
+        Test Environment (/test) • Unlimited Capacity • Centralized Server Active
       </footer>
+
+      {/* Import & Merge Master Payload Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#1E293B] border border-slate-700 rounded-xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-150">
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-800/40">
+              <div className="flex items-center gap-2">
+                <Upload size={18} className="text-indigo-400" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wide">
+                  Import &amp; Merge Master Registry
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImportModal(false);
+                  setImportStatus(null);
+                  setImportJsonText('');
+                }}
+                className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Paste the exported JSON registry from another system or admin panel below. This will perform a <strong>lossless bidirectional merge</strong> into the centralized server, unifying all accounts and login history.
+              </p>
+
+              <textarea
+                value={importJsonText}
+                onChange={(e) => setImportJsonText(e.target.value)}
+                placeholder='{\n  "users": { ... },\n  "attempts": [ ... ]\n}'
+                rows={8}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs text-emerald-400 font-mono focus:outline-none focus:border-indigo-500"
+              />
+
+              {importStatus && (
+                <div className={`text-xs p-3 rounded border flex items-center gap-2 ${
+                  importStatus.type === 'success'
+                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                    : 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+                }`}>
+                  {importStatus.type === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+                  <span>{importStatus.message}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowImportModal(false);
+                    setImportStatus(null);
+                    setImportJsonText('');
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!importJsonText.trim() || isRemoteSyncing}
+                  onClick={handleApplyImportJson}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium rounded shadow transition-colors cursor-pointer flex items-center gap-2"
+                >
+                  {isRemoteSyncing ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
+                  <span>{isRemoteSyncing ? 'Merging...' : 'Merge Into Master Server'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

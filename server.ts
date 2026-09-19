@@ -233,7 +233,194 @@ async function startServer() {
     res.json({ success: true, users: inMemoryUsers });
   });
 
-  // 6. Clear attempts history
+  // 6. Centralized Master Sync (Bidirectional merge across any client, browser, or admin system)
+  app.post('/api/test/sync', (req, res) => {
+    try {
+      const { users, attempts, authorizedUsers } = req.body || {};
+
+      let hasUserChanges = false;
+      let hasAttemptChanges = false;
+      let hasAuthChanges = false;
+
+      // 1. Merge users
+      if (users && typeof users === 'object') {
+        for (const [rawEmail, rawPass] of Object.entries(users)) {
+          const clean = (rawEmail || '').trim().toLowerCase();
+          if (clean && clean !== 'anonymous@test.local') {
+            const passStr = String(rawPass || 'password123');
+            if (!inMemoryUsers[clean] || inMemoryUsers[clean] !== passStr) {
+              inMemoryUsers[clean] = passStr;
+              hasUserChanges = true;
+            }
+          }
+        }
+        if (hasUserChanges) {
+          atomicWriteJson(USERS_PATH, inMemoryUsers);
+        }
+      }
+
+      // 2. Merge attempts
+      if (Array.isArray(attempts) && attempts.length > 0) {
+        const attemptMap = new Map<string, LoginAttempt>();
+        for (const att of inMemoryAttempts) {
+          attemptMap.set(att.id || `${att.time}_${att.email}`, att);
+        }
+        for (const att of attempts) {
+          if (att && att.email) {
+            const key = att.id || `${att.time}_${att.email}`;
+            if (!attemptMap.has(key)) {
+              attemptMap.set(key, att);
+              hasAttemptChanges = true;
+            }
+          }
+        }
+        if (hasAttemptChanges) {
+          inMemoryAttempts = Array.from(attemptMap.values()).sort(
+            (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()
+          );
+          atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+        }
+      }
+
+      // 3. Merge authorized admins
+      if (Array.isArray(authorizedUsers) && authorizedUsers.length > 0) {
+        for (const authEmail of authorizedUsers) {
+          const clean = (authEmail || '').trim().toLowerCase();
+          if (clean && clean.includes('@') && !inMemoryAuthorized.includes(clean)) {
+            inMemoryAuthorized.push(clean);
+            hasAuthChanges = true;
+          }
+        }
+        if (!inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL)) {
+          inMemoryAuthorized.unshift(PRIMARY_ADMIN_EMAIL);
+          hasAuthChanges = true;
+        }
+        if (hasAuthChanges) {
+          atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+        }
+      }
+
+      const cleanAuth = Array.from(new Set([PRIMARY_ADMIN_EMAIL, ...inMemoryAuthorized]));
+      res.json({
+        success: true,
+        message: 'Centralized master synchronization complete',
+        users: inMemoryUsers,
+        attempts: inMemoryAttempts,
+        authorizedUsers: cleanAuth,
+        primaryAdmin: PRIMARY_ADMIN_EMAIL,
+        totalUsers: Object.keys(inMemoryUsers).length,
+        totalAttempts: inMemoryAttempts.length,
+        serverTime: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('Error during centralized sync:', err);
+      res.status(500).json({ success: false, error: String(err) });
+    }
+  });
+
+  // 7. Peer-to-Peer Remote Instance Sync (connects two servers e.g. dev and shared URLs)
+  app.post('/api/test/peer-sync', async (req, res) => {
+    try {
+      const { remoteUrl } = req.body || {};
+      if (!remoteUrl || typeof remoteUrl !== 'string') {
+        return res.status(400).json({ success: false, message: 'Valid remote URL required' });
+      }
+
+      const cleanRemote = remoteUrl.trim().replace(/\/+$/, '');
+      const targetApi = `${cleanRemote}/api/test/data`;
+
+      const fetchRes = await fetch(targetApi, {
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!fetchRes.ok) {
+        return res.status(502).json({ 
+          success: false, 
+          message: `Failed to fetch data from remote instance at ${targetApi}: Status ${fetchRes.status}` 
+        });
+      }
+
+      const remoteData = await fetchRes.json();
+      if (!remoteData || !remoteData.success) {
+        return res.status(502).json({ success: false, message: 'Invalid response from remote instance' });
+      }
+
+      // Merge remote users into local server
+      if (remoteData.users && typeof remoteData.users === 'object') {
+        for (const [em, pass] of Object.entries(remoteData.users)) {
+          const clean = (em || '').trim().toLowerCase();
+          if (clean && clean !== 'anonymous@test.local') {
+            inMemoryUsers[clean] = String(pass || inMemoryUsers[clean] || 'password123');
+          }
+        }
+        atomicWriteJson(USERS_PATH, inMemoryUsers);
+      }
+
+      // Merge remote attempts
+      if (Array.isArray(remoteData.attempts)) {
+        const attemptMap = new Map<string, LoginAttempt>();
+        for (const att of inMemoryAttempts) {
+          attemptMap.set(att.id || `${att.time}_${att.email}`, att);
+        }
+        for (const att of remoteData.attempts) {
+          if (att && att.email) {
+            const key = att.id || `${att.time}_${att.email}`;
+            if (!attemptMap.has(key)) {
+              attemptMap.set(key, att);
+            }
+          }
+        }
+        inMemoryAttempts = Array.from(attemptMap.values()).sort(
+          (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()
+        );
+        atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+      }
+
+      // Merge remote authorized users
+      if (Array.isArray(remoteData.authorizedUsers)) {
+        for (const u of remoteData.authorizedUsers) {
+          const clean = (u || '').trim().toLowerCase();
+          if (clean && !inMemoryAuthorized.includes(clean)) {
+            inMemoryAuthorized.push(clean);
+          }
+        }
+        if (!inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL)) {
+          inMemoryAuthorized.unshift(PRIMARY_ADMIN_EMAIL);
+        }
+        atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+      }
+
+      // Send our current combined state back to the remote instance so it's a 2-way sync!
+      try {
+        await fetch(`${cleanRemote}/api/test/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            users: inMemoryUsers,
+            attempts: inMemoryAttempts,
+            authorizedUsers: inMemoryAuthorized,
+          }),
+        });
+      } catch (e) {
+        console.warn('Could not push back to remote instance:', e);
+      }
+
+      res.json({
+        success: true,
+        message: `Successfully synchronized with remote instance ${cleanRemote}`,
+        totalUsers: Object.keys(inMemoryUsers).length,
+        totalAttempts: inMemoryAttempts.length,
+        users: inMemoryUsers,
+        attempts: inMemoryAttempts,
+        authorizedUsers: inMemoryAuthorized,
+      });
+    } catch (err) {
+      console.error('Error in peer sync:', err);
+      res.status(500).json({ success: false, error: String(err) });
+    }
+  });
+
+  // 8. Clear attempts history
   app.post('/api/test/clear-attempts', (req, res) => {
     inMemoryAttempts = [];
     atomicWriteJson(ATTEMPTS_PATH, []);
