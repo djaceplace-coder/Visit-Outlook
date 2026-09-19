@@ -1,0 +1,8 @@
+{
+  "name": "Remix Inbound",
+  "description": "A warm, minimal personal productivity web app in test mode",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
