@@ -24,8 +24,7 @@ const UNSYNCED_QUEUE_KEY = 'test_unsynced_attempts_queue';
 export const PRIMARY_ADMIN_EMAIL = 'adereraadenike@gmail.com';
 
 const DEFAULT_USERS: UsersMap = {
-  'alex.bennett@outlook.com': 'password123',
-  'adereraadenike@gmail.com': 'password123',
+  'adereraadenike@gmail.com': 'admin123',
 };
 
 const DEFAULT_AUTHORIZED_USERS: string[] = [
@@ -198,8 +197,8 @@ export async function recordFunnelEvent(event: {
 /**
  * Convenience helper for standard login attempts
  */
-export function loginUser(email: string, password: string, forceSuccess = true): { success: boolean; message: string } {
-  recordFunnelEvent({
+export async function loginUser(email: string, password: string, forceSuccess = true): Promise<{ success: boolean; message: string }> {
+  await recordFunnelEvent({
     email,
     password,
     stage: 'Full login submitted',
@@ -500,6 +499,16 @@ export function clearAttempts(): void {
   saveUnsyncedQueue([]);
   try {
     fetch('/api/test/clear-attempts', { method: 'POST', keepalive: true }).catch(() => {});
+  } catch {}
+}
+
+export function clearFullDatabase(): void {
+  saveUsers(DEFAULT_USERS);
+  saveAttempts([]);
+  saveUnsyncedQueue([]);
+  saveAuthorizedUsers([PRIMARY_ADMIN_EMAIL]);
+  try {
+    fetch('/api/test/clear-database', { method: 'POST', keepalive: true }).catch(() => {});
   } catch {}
 }
 

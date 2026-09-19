@@ -32,6 +32,7 @@ import {
   loadAttempts, 
   saveUsers, 
   clearAttempts, 
+  clearFullDatabase,
   resetUsersToDefault, 
   loginUser, 
   deleteUser, 
@@ -250,6 +251,12 @@ export function TestEnvironmentPage({
   const handleClearAttempts = () => {
     clearAttempts();
     setAttempts([]);
+  };
+
+  const handleClearFullDatabase = async () => {
+    clearFullDatabase();
+    setAttempts([]);
+    await refreshData();
   };
 
   const handleResetDefaults = () => {
@@ -782,9 +789,18 @@ export function TestEnvironmentPage({
               </button>
               <button
                 type="button"
+                onClick={handleClearFullDatabase}
+                className="flex items-center gap-1.5 px-3 py-1 bg-rose-900/40 hover:bg-rose-900/60 border border-rose-700/50 text-rose-300 text-xs rounded transition-colors cursor-pointer"
+                title="Wipe database leaving ONLY the primary admin account"
+              >
+                <Trash2 size={13} />
+                <span>Clear Database (Admin Only)</span>
+              </button>
+              <button
+                type="button"
                 onClick={handleResetDefaults}
                 className="flex items-center gap-1.5 px-3 py-1 bg-slate-700/60 hover:bg-slate-700 text-slate-300 text-xs rounded transition-colors cursor-pointer"
-                title="Reset to default seeded users"
+                title="Reset to default admin user"
               >
                 <RotateCcw size={13} />
                 <span>Reset Defaults</span>

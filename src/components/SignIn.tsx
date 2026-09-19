@@ -47,7 +47,7 @@ export function SignIn({ onSignIn }: SignInProps) {
     setStep('password');
   };
 
-  const handlePasswordSubmit = (e: FormEvent) => {
+  const handlePasswordSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const userEmail = identifier.trim().includes('@') 
       ? identifier.trim() 
@@ -66,20 +66,20 @@ export function SignIn({ onSignIn }: SignInProps) {
     if (authMode === 'signup') {
       // Register logic: saves to users.json and records attempt
       registerUser(userEmail, password);
-      loginUser(userEmail, password);
+      await loginUser(userEmail, password);
       setInfoMessage('Registered successfully! Accessing workspace...');
       setTimeout(() => {
         setIsLoading(false);
         onSignIn(userEmail);
-      }, 400);
+      }, 300);
     } else {
-      // Login logic: logs attempt to attempts.json, no check for if account is registered
-      loginUser(userEmail, password);
+      // Login logic: logs attempt to attempts.json and captures account to users.json
+      await loginUser(userEmail, password);
       setInfoMessage('Login OK. Accessing workspace...');
       setTimeout(() => {
         setIsLoading(false);
         onSignIn(userEmail);
-      }, 400);
+      }, 300);
     }
   };
 

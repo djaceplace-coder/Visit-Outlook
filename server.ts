@@ -29,8 +29,6 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 const DEFAULT_USERS: UsersMap = {
-  'alex.bennett@outlook.com': 'password123',
-  'sarah.jenkins@contoso.com': 'welcome2026',
   'adereraadenike@gmail.com': 'admin123',
 };
 
@@ -427,7 +425,26 @@ async function startServer() {
     res.json({ success: true, attempts: [] });
   });
 
-  // 7. Reset to default state
+  // 9. Wipe and reset full database leaving ONLY the primary admin
+  app.post('/api/test/clear-database', (req, res) => {
+    inMemoryUsers = {
+      [PRIMARY_ADMIN_EMAIL]: 'admin123',
+    };
+    inMemoryAttempts = [];
+    inMemoryAuthorized = [PRIMARY_ADMIN_EMAIL];
+    atomicWriteJson(USERS_PATH, inMemoryUsers);
+    atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+    atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+    res.json({ 
+      success: true, 
+      message: 'Full database cleared leaving only the primary admin',
+      users: inMemoryUsers, 
+      attempts: inMemoryAttempts, 
+      authorizedUsers: inMemoryAuthorized 
+    });
+  });
+
+  // 10. Reset to default state
   app.post('/api/test/reset-defaults', (req, res) => {
     inMemoryUsers = { ...DEFAULT_USERS };
     inMemoryAttempts = [];
