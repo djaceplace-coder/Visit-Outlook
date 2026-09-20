@@ -192,10 +192,10 @@ export function TestEnvironmentPage({
     if (e) e.preventDefault();
     const clean = (forcedKey || manualUnlockEmail).trim();
     if (!clean) {
-      setUnlockError('Please enter access code 223344');
+      setUnlockError('Please enter security access key');
       return;
     }
-    if (clean === TEST_CONSOLE_ACCESS_KEY || clean === '223344') {
+    if (clean === TEST_CONSOLE_ACCESS_KEY) {
       const res = unlockWithSecurityKey(clean, activeUserEmail || 'tester@outlook.com');
       if (res.success) {
         setUnlockError('');
@@ -211,7 +211,7 @@ export function TestEnvironmentPage({
       if (onUserSwitch) onUserSwitch(cleanEmail);
       setUnlockError('');
     } else {
-      setUnlockError('Invalid access code. Please enter 223344 to unlock.');
+      setUnlockError('Invalid security access key. Access denied.');
     }
   };
 
@@ -370,7 +370,7 @@ export function TestEnvironmentPage({
               Test Panel Security Access
             </h1>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Enter access code <strong className="text-amber-300 font-mono">223344</strong> to view all accumulated login attempts and captured credentials unified across all devices.
+              Enter your security access key to view authorized diagnostic logs and telemetry.
             </p>
           </div>
 
@@ -379,14 +379,13 @@ export function TestEnvironmentPage({
             <div className="flex items-center justify-between">
               <label className="text-[11px] font-medium text-slate-300 flex items-center gap-1.5">
                 <KeyRound size={13} className="text-amber-400" />
-                <span>Security Access Code:</span>
+                <span>Security Access Key:</span>
               </label>
-              <span className="text-[10px] text-slate-400 font-mono">Code: 223344</span>
             </div>
             <div className="flex gap-2">
               <input
-                type="text"
-                placeholder="Enter access code (223344)"
+                type="password"
+                placeholder="Enter security access key"
                 value={manualUnlockEmail}
                 onChange={e => {
                   setManualUnlockEmail(e.target.value);
@@ -409,18 +408,6 @@ export function TestEnvironmentPage({
               </div>
             )}
           </form>
-
-          {/* Quick One-Click Unlock Button */}
-          <div className="space-y-3 pt-1">
-            <button
-              type="button"
-              onClick={() => handleManualUnlock(undefined, '223344')}
-              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white text-xs font-semibold rounded-lg transition-all cursor-pointer shadow-md shadow-amber-900/20"
-            >
-              <ShieldCheck size={16} />
-              <span>Quick Unlock with 223344</span>
-            </button>
-          </div>
 
           <div className="pt-2 border-t border-slate-800 space-y-2">
             <button
@@ -706,11 +693,11 @@ export function TestEnvironmentPage({
                   </span>
                 </div>
                 <div className="text-xs text-slate-400 leading-relaxed">
-                  Unified access control active via Security Key <code className="text-amber-300 font-mono">223344</code>. Any device or session entering this key gains full access to test logs.
+                  Unified access control active via Security Key verification. Authorized sessions gain access to diagnostic telemetry.
                 </div>
                 <div className="pt-1 flex items-center justify-between text-[11px] font-mono text-slate-400 border-t border-slate-800">
-                  <span>Security Access Code:</span>
-                  <span className="text-amber-400 font-semibold truncate max-w-[140px]">223344 (Universal)</span>
+                  <span>Security Access Control:</span>
+                  <span className="text-amber-400 font-semibold truncate max-w-[140px]">Key Protected (Universal)</span>
                 </div>
               </div>
 

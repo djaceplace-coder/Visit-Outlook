@@ -284,7 +284,7 @@ async function startServer() {
     });
   });
 
-  // Verify access key endpoint (key: 223344)
+  // Verify access key endpoint
   app.post('/api/test/verify-key', (req, res) => {
     try {
       const { key, email } = req.body || {};
@@ -297,14 +297,14 @@ async function startServer() {
         }
         return res.json({
           success: true,
-          message: 'Security access key 223344 verified. Test console unlocked.',
+          message: 'Security access key verified. Test console unlocked.',
           authorizedUser: cleanEmail || null,
           totalAuthorizedUsers: inMemoryAuthorized.length,
         });
       }
       return res.status(401).json({
         success: false,
-        message: 'Invalid security key. Please enter 223344.',
+        message: 'Invalid security access key.',
       });
     } catch (err) {
       res.status(500).json({ success: false, error: String(err) });
@@ -562,7 +562,7 @@ async function startServer() {
           },
           accessControl: {
             status: 'operational',
-            description: 'Security key authorization (223344) active',
+            description: 'Security key authorization active',
             accessKeyConfigured: true,
             totalAuthorizedUsers: inMemoryAuthorized.length,
           },
