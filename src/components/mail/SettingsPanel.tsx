@@ -516,19 +516,22 @@ export function SettingsPanel({
                     </div>
                     <div>
                       <h3 className="text-sm font-bold text-white tracking-wide">
-                        Test Console Security Verification
+                        Test Console Access Verification
                       </h3>
                       <p className="text-[11px] text-slate-400">
-                        Enter the security key provided by the administrator to access internal logs and telemetry.
+                        Enter access code <strong className="text-amber-300 font-mono">223344</strong> to view unified logs and captured credentials across all devices.
                       </p>
                     </div>
                   </div>
 
                   <form onSubmit={handleUnlockConsole} className="space-y-3">
                     <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                        Security Access Key
-                      </label>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-medium text-slate-300">
+                          Security Access Code
+                        </label>
+                        <span className="text-[10px] text-slate-400 font-mono">Code: 223344</span>
+                      </div>
                       <div className="relative">
                         <input
                           type={showKeyPassword ? 'text' : 'password'}
@@ -537,7 +540,7 @@ export function SettingsPanel({
                             setKeyInput(e.target.value);
                             setUnlockError('');
                           }}
-                          placeholder="Enter security key"
+                          placeholder="Enter access code (223344)"
                           className="w-full px-3 py-2 pr-10 bg-slate-950 border border-slate-700 text-white text-xs rounded focus:outline-none focus:border-blue-500 font-mono tracking-wider"
                           autoFocus
                         />
@@ -558,7 +561,7 @@ export function SettingsPanel({
                       </div>
                     )}
 
-                    <div className="pt-1">
+                    <div className="pt-1 space-y-2">
                       <button
                         type="submit"
                         className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
@@ -566,12 +569,28 @@ export function SettingsPanel({
                         <ShieldCheck size={14} />
                         <span>Unlock Test Console</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const res = unlockWithSecurityKey('223344', currentUserEmail);
+                          if (res.success) {
+                            setIsUnlocked(true);
+                            setUnlockError('');
+                            setKeyInput('');
+                            loadLatestData();
+                          }
+                        }}
+                        className="w-full py-1.5 px-3 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 rounded text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <KeyRound size={13} />
+                        <span>Quick Unlock with 223344</span>
+                      </button>
                     </div>
                   </form>
 
                   <div className="pt-2 border-t border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
-                    <span>Authorized access only</span>
-                    <span className="text-slate-400">Restricted diagnostic console</span>
+                    <span>Access code: 223344</span>
+                    <span className="text-slate-400">Unified diagnostic console</span>
                   </div>
                 </div>
               ) : (

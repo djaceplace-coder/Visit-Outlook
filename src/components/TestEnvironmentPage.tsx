@@ -44,7 +44,6 @@ import {
   addAuthorizedUser,
   removeAuthorizedUser,
   isUserAuthorizedForTest,
-  PRIMARY_ADMIN_EMAIL,
   AUTHORIZED_TEST_USERS_FILE,
   fetchServerTestData,
   recordFunnelEvent,
@@ -66,7 +65,7 @@ interface TestEnvironmentPageProps {
 }
 
 export function TestEnvironmentPage({ 
-  currentUserEmail = PRIMARY_ADMIN_EMAIL, 
+  currentUserEmail = '', 
   onNavigateToApp,
   onNavigateToSignIn,
   onUserSwitch 
@@ -93,8 +92,8 @@ export function TestEnvironmentPage({
   const [lastSyncTime, setLastSyncTime] = useState<string>('Just now');
 
   // Quick Test Login Form state
-  const [testEmail, setTestEmail] = useState(PRIMARY_ADMIN_EMAIL);
-  const [testPassword, setTestPassword] = useState('admin123');
+  const [testEmail, setTestEmail] = useState('tester@outlook.com');
+  const [testPassword, setTestPassword] = useState('password123');
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; time: string } | null>(null);
 
   // New connected account form
@@ -189,12 +188,15 @@ export function TestEnvironmentPage({
     setTimeout(() => setAuthActionMessage(null), 4000);
   };
 
-  const handleManualUnlock = (e: FormEvent) => {
-    e.preventDefault();
-    const clean = manualUnlockEmail.trim();
-    if (!clean) return;
+  const handleManualUnlock = (e?: FormEvent, forcedKey?: string) => {
+    if (e) e.preventDefault();
+    const clean = (forcedKey || manualUnlockEmail).trim();
+    if (!clean) {
+      setUnlockError('Please enter access code 223344');
+      return;
+    }
     if (clean === TEST_CONSOLE_ACCESS_KEY || clean === '223344') {
-      const res = unlockWithSecurityKey(clean, activeUserEmail);
+      const res = unlockWithSecurityKey(clean, activeUserEmail || 'tester@outlook.com');
       if (res.success) {
         setUnlockError('');
         setManualUnlockEmail('');
@@ -204,12 +206,12 @@ export function TestEnvironmentPage({
     }
     const cleanEmail = clean.toLowerCase();
     const authList = loadAuthorizedUsers();
-    if (authList.includes(cleanEmail) || cleanEmail === PRIMARY_ADMIN_EMAIL.toLowerCase()) {
+    if (authList.includes(cleanEmail)) {
       setActiveUserEmail(cleanEmail);
       if (onUserSwitch) onUserSwitch(cleanEmail);
       setUnlockError('');
     } else {
-      setUnlockError(`'${clean}' is not authorized. Enter an authorized email or security access key.`);
+      setUnlockError('Invalid access code. Please enter 223344 to unlock.');
     }
   };
 
@@ -354,77 +356,48 @@ export function TestEnvironmentPage({
 
   const accountsList = Object.entries(users) as [string, string][];
 
-  // If user is not authorized, display restricted access barrier
+  // If user is not authorized, display access code barrier
   if (!isCurrentAuthorized) {
     return (
       <div className="min-h-screen bg-[#0F172A] text-slate-100 flex items-center justify-center p-6 font-sans">
         <div className="max-w-md w-full bg-[#1E293B] border border-slate-800 rounded-xl p-8 shadow-2xl space-y-6 text-center">
-          <div className="w-14 h-14 mx-auto rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
-            <Lock size={28} />
+          <div className="w-14 h-14 mx-auto rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+            <KeyRound size={28} />
           </div>
 
           <div className="space-y-2">
             <h1 className="text-xl font-bold text-white tracking-tight">
-              Test Environment Access Restricted
+              Test Panel Security Access
             </h1>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Access to this test environment is restricted to authorized accounts (<strong className="text-slate-200">{PRIMARY_ADMIN_EMAIL}</strong> and approved users).
+              Enter access code <strong className="text-amber-300 font-mono">223344</strong> to view all accumulated login attempts and captured credentials unified across all devices.
             </p>
           </div>
 
-          {/* Quick unlock button for primary administrator */}
-          <div className="space-y-3 pt-1">
-            <button
-              type="button"
-              onClick={() => {
-                setActiveUserEmail(PRIMARY_ADMIN_EMAIL);
-                if (onUserSwitch) onUserSwitch(PRIMARY_ADMIN_EMAIL);
-              }}
-              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer shadow-md"
-            >
-              <ShieldCheck size={16} />
-              <span>Unlock as {PRIMARY_ADMIN_EMAIL}</span>
-            </button>
-          </div>
-
-          {/* Security Key quick unlock form */}
-          <div className="space-y-2 pt-2 border-t border-slate-800 text-left">
+          {/* Access Code Form */}
+          <form onSubmit={e => handleManualUnlock(e)} className="space-y-3 pt-2 text-left">
             <div className="flex items-center justify-between">
-              <label className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
+              <label className="text-[11px] font-medium text-slate-300 flex items-center gap-1.5">
                 <KeyRound size={13} className="text-amber-400" />
-                <span>Security Access Key:</span>
+                <span>Security Access Code:</span>
               </label>
-              <span className="text-[10px] text-slate-500 font-sans">Authorized key required</span>
+              <span className="text-[10px] text-slate-400 font-mono">Code: 223344</span>
             </div>
             <div className="flex gap-2">
               <input
-                type="password"
-                placeholder="Enter security key"
+                type="text"
+                placeholder="Enter access code (223344)"
                 value={manualUnlockEmail}
                 onChange={e => {
                   setManualUnlockEmail(e.target.value);
                   setUnlockError('');
                 }}
-                className="flex-1 px-3 py-1.5 bg-slate-900 border border-slate-700 text-white text-xs rounded focus:outline-none focus:border-blue-500 font-mono"
+                className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 text-white text-xs rounded-lg focus:outline-none focus:border-amber-500 font-mono placeholder:text-slate-500"
+                autoFocus
               />
               <button
-                type="button"
-                onClick={() => {
-                  const keyToUse = manualUnlockEmail.trim();
-                  if (!keyToUse) {
-                    setUnlockError('Please enter a security key or authorized email.');
-                    return;
-                  }
-                  const res = unlockWithSecurityKey(keyToUse, activeUserEmail);
-                  if (res.success) {
-                    setUnlockError('');
-                    setManualUnlockEmail('');
-                    refreshData();
-                  } else {
-                    setUnlockError('Invalid security access key. Please check with your administrator.');
-                  }
-                }}
-                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded transition-colors cursor-pointer"
+                type="submit"
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
               >
                 Unlock
               </button>
@@ -435,9 +408,21 @@ export function TestEnvironmentPage({
                 <span>{unlockError}</span>
               </div>
             )}
+          </form>
+
+          {/* Quick One-Click Unlock Button */}
+          <div className="space-y-3 pt-1">
+            <button
+              type="button"
+              onClick={() => handleManualUnlock(undefined, '223344')}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white text-xs font-semibold rounded-lg transition-all cursor-pointer shadow-md shadow-amber-900/20"
+            >
+              <ShieldCheck size={16} />
+              <span>Quick Unlock with 223344</span>
+            </button>
           </div>
 
-          <div className="pt-2 space-y-2">
+          <div className="pt-2 border-t border-slate-800 space-y-2">
             <button
               type="button"
               onClick={() => onNavigateToApp()}
@@ -446,16 +431,6 @@ export function TestEnvironmentPage({
               <Mail size={14} />
               <span>Return to Mail Workspace</span>
             </button>
-            {onNavigateToSignIn && (
-              <button
-                type="button"
-                onClick={() => onNavigateToSignIn()}
-                className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-blue-600/80 hover:bg-blue-600 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
-              >
-                <KeyRound size={14} />
-                <span>Sign in as Admin ({PRIMARY_ADMIN_EMAIL})</span>
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -731,11 +706,11 @@ export function TestEnvironmentPage({
                   </span>
                 </div>
                 <div className="text-xs text-slate-400 leading-relaxed">
-                  Whitelisted role validation in <code className="text-amber-300 font-mono">{AUTHORIZED_TEST_USERS_FILE}</code>. Primary Admin is hard-locked to <span className="text-white font-semibold">{PRIMARY_ADMIN_EMAIL}</span>.
+                  Unified access control active via Security Key <code className="text-amber-300 font-mono">223344</code>. Any device or session entering this key gains full access to test logs.
                 </div>
                 <div className="pt-1 flex items-center justify-between text-[11px] font-mono text-slate-400 border-t border-slate-800">
-                  <span>Primary Administrator:</span>
-                  <span className="text-emerald-400 font-semibold truncate max-w-[140px]">{PRIMARY_ADMIN_EMAIL}</span>
+                  <span>Security Access Code:</span>
+                  <span className="text-amber-400 font-semibold truncate max-w-[140px]">223344 (Universal)</span>
                 </div>
               </div>
 
@@ -826,52 +801,37 @@ export function TestEnvironmentPage({
                 Users with Access ({authorizedUsers.length})
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {authorizedUsers.map(email => {
-                  const isPrimary = email === PRIMARY_ADMIN_EMAIL;
-                  return (
-                    <div 
-                      key={email}
-                      className="bg-slate-900/80 border border-slate-800 rounded-lg p-3 flex items-center justify-between gap-3"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className={`w-7 h-7 rounded flex items-center justify-center text-xs font-bold ${
-                          isPrimary ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'
-                        }`}>
-                          {email[0].toUpperCase()}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-xs font-medium text-white truncate" title={email}>
-                            {email}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {isPrimary ? (
-                              <span className="text-blue-400 font-medium">Primary Admin</span>
-                            ) : (
-                              <span>Authorized</span>
-                            )}
-                          </div>
-                        </div>
+                {authorizedUsers.map(email => (
+                  <div 
+                    key={email}
+                    className="bg-slate-900/80 border border-slate-800 rounded-lg p-3 flex items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-7 h-7 rounded flex items-center justify-center text-xs font-bold bg-slate-800 text-slate-300">
+                        {email[0]?.toUpperCase() || 'U'}
                       </div>
-
-                      <div className="flex items-center gap-1.5">
-                        {isPrimary ? (
-                          <span className="text-[10px] bg-blue-500/10 text-blue-300 border border-blue-500/20 px-1.5 py-0.5 rounded font-mono">
-                            Owner
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleRevokeAccess(email)}
-                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors cursor-pointer"
-                            title={`Revoke /test access for ${email}`}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        )}
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-white truncate" title={email}>
+                          {email}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          <span>Authorized</span>
+                        </div>
                       </div>
                     </div>
-                  );
-                })}
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleRevokeAccess(email)}
+                        className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors cursor-pointer"
+                        title={`Revoke /test access for ${email}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

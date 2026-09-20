@@ -33,7 +33,7 @@ export default function App() {
   const [isTestRoute, setIsTestRoute] = useState(checkIsTestPath);
   const [appState, setAppState] = useState<AppState>('entry-loader');
   const [userEmail, setUserEmail] = useState(() => {
-    return localStorage.getItem('outlook_test_user_email') || 'adereraadenike@gmail.com';
+    return localStorage.getItem('outlook_test_user_email') || 'alex.bennett@outlook.com';
   });
   const [currentSection, setCurrentSection] = useState<Section>('inbox');
   const [isFolderPaneOpen, setIsFolderPaneOpen] = useState(true);
@@ -95,7 +95,7 @@ export default function App() {
   };
 
   const navigateToApp = (email?: string) => {
-    const targetEmail = email || userEmail || 'adereraadenike@gmail.com';
+    const targetEmail = email || userEmail || 'alex.bennett@outlook.com';
     setUserEmail(targetEmail);
     try {
       localStorage.setItem('outlook_test_user_email', targetEmail);

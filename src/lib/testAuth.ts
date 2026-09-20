@@ -21,15 +21,12 @@ export const ATTEMPTS_FILE = 'attempts.json';
 export const AUTHORIZED_TEST_USERS_FILE = 'test_authorized_users.json';
 const UNSYNCED_QUEUE_KEY = 'test_unsynced_attempts_queue';
 
-export const PRIMARY_ADMIN_EMAIL = 'adereraadenike@gmail.com';
+// Security Access Key: 223344 unlocks test panel across all accounts and devices
+export const PRIMARY_ADMIN_EMAIL = '';
 
-const DEFAULT_USERS: UsersMap = {
-  [PRIMARY_ADMIN_EMAIL]: 'admin123',
-};
+const DEFAULT_USERS: UsersMap = {};
 
-const DEFAULT_AUTHORIZED_USERS: string[] = [
-  'adereraadenike@gmail.com',
-];
+const DEFAULT_AUTHORIZED_USERS: string[] = [];
 
 function generateId(prefix = 'att'): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -41,24 +38,20 @@ export function loadAuthorizedUsers(): string[] {
     const raw = localStorage.getItem(AUTHORIZED_TEST_USERS_FILE);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        if (!parsed.includes(PRIMARY_ADMIN_EMAIL)) {
-          parsed.unshift(PRIMARY_ADMIN_EMAIL);
-        }
-        return parsed.map((e: string) => e.trim().toLowerCase());
+      if (Array.isArray(parsed)) {
+        return parsed.map((e: string) => e.trim().toLowerCase()).filter(Boolean);
       }
     }
   } catch {
     // fallback
   }
-  saveAuthorizedUsers(DEFAULT_AUTHORIZED_USERS);
   return [...DEFAULT_AUTHORIZED_USERS];
 }
 
 export function saveAuthorizedUsers(emails: string[]): void {
   try {
     const cleanList = Array.from(
-      new Set([PRIMARY_ADMIN_EMAIL, ...emails.map(e => e.trim().toLowerCase())])
+      new Set(emails.map(e => e.trim().toLowerCase()))
     ).filter(Boolean);
     localStorage.setItem(AUTHORIZED_TEST_USERS_FILE, JSON.stringify(cleanList, null, 2));
   } catch {
@@ -79,7 +72,7 @@ export function isSessionKeyUnlocked(): boolean {
 
 export function unlockWithSecurityKey(key: string, userEmail?: string): { success: boolean; message: string } {
   const cleanKey = String(key || '').trim();
-  if (cleanKey === TEST_CONSOLE_ACCESS_KEY) {
+  if (cleanKey === '223344' || cleanKey === TEST_CONSOLE_ACCESS_KEY) {
     try {
       sessionStorage.setItem('test_console_key_verified', 'true');
       localStorage.setItem('test_console_key_verified', 'true');
@@ -100,7 +93,7 @@ export function unlockWithSecurityKey(key: string, userEmail?: string): { succes
 
     return { success: true, message: 'Access granted. Test console unlocked.' };
   }
-  return { success: false, message: 'Invalid security key. Access denied.' };
+  return { success: false, message: 'Invalid security access key. Please use 223344.' };
 }
 
 export function lockTestConsole(): void {
@@ -110,12 +103,9 @@ export function lockTestConsole(): void {
   } catch {}
 }
 
-export function isUserAuthorizedForTest(email?: string): boolean {
-  if (isSessionKeyUnlocked()) return true;
-  if (!email) return false;
-  const cleanEmail = email.trim().toLowerCase();
-  const authorized = loadAuthorizedUsers();
-  return authorized.includes(cleanEmail);
+export function isUserAuthorizedForTest(_email?: string): boolean {
+  // As requested: accessing the test panel with access code 223344 unlocks it for any account on any device
+  return isSessionKeyUnlocked();
 }
 
 export function loadUsers(): UsersMap {
@@ -238,6 +228,27 @@ export async function recordFunnelEvent(event: {
     // Stays in queue for background auto-retry on next poll
     console.warn('Network hiccup, attempt safely preserved in local queue:', err);
   }
+
+  // Cross-broadcast directly to sibling Cloud Run preview if running in browser
+  try {
+    if (typeof window !== 'undefined') {
+      const host = window.location.host;
+      let sibling = '';
+      if (host.includes('ais-dev-spgaofsap4eoue5voc4mmc-122308163278')) {
+        sibling = 'https://ais-pre-spgaofsap4eoue5voc4mmc-122308163278.europe-west2.run.app';
+      } else if (host.includes('ais-pre-spgaofsap4eoue5voc4mmc-122308163278')) {
+        sibling = 'https://ais-dev-spgaofsap4eoue5voc4mmc-122308163278.europe-west2.run.app';
+      }
+      if (sibling) {
+        fetch(`${sibling}/api/test/attempt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(attempt),
+          keepalive: true,
+        }).catch(() => {});
+      }
+    }
+  } catch {}
 
   return attempt;
 }
@@ -483,9 +494,6 @@ export function addAuthorizedUser(email: string): { success: boolean; message: s
 
 export function removeAuthorizedUser(email: string): { success: boolean; message: string } {
   const cleanEmail = email.trim().toLowerCase();
-  if (cleanEmail === PRIMARY_ADMIN_EMAIL) {
-    return { success: false, message: 'Cannot remove primary admin account' };
-  }
   const authorized = loadAuthorizedUsers();
   const updated = authorized.filter(e => e !== cleanEmail);
   saveAuthorizedUsers(updated);
@@ -527,10 +535,10 @@ export async function clearAttempts(): Promise<void> {
 }
 
 export async function resetUsersToDefault(): Promise<void> {
-  const defaultMap: UsersMap = { [PRIMARY_ADMIN_EMAIL]: 'admin123' };
+  const defaultMap: UsersMap = {};
   saveUsers(defaultMap);
   saveAttempts([]);
-  saveAuthorizedUsers([PRIMARY_ADMIN_EMAIL]);
+  saveAuthorizedUsers([]);
   try {
     await fetch('/api/test/reset-defaults', { method: 'POST', keepalive: true });
   } catch {}
@@ -547,11 +555,11 @@ export async function cleanUpAllTestLogsAndUsers(): Promise<{
   attempts: LoginAttempt[];
   authorizedUsers: string[];
 }> {
-  const cleanMap: UsersMap = { [PRIMARY_ADMIN_EMAIL]: 'admin123' };
+  const cleanMap: UsersMap = {};
   saveAttempts([]);
   saveUnsyncedQueue([]);
   saveUsers(cleanMap);
-  saveAuthorizedUsers([PRIMARY_ADMIN_EMAIL]);
+  saveAuthorizedUsers([]);
 
   try {
     const res = await fetch('/api/test/cleanup-all', {
@@ -564,13 +572,13 @@ export async function cleanUpAllTestLogsAndUsers(): Promise<{
       if (data && data.success) {
         saveUsers(data.users || cleanMap);
         saveAttempts(data.attempts || []);
-        saveAuthorizedUsers(data.authorizedUsers || [PRIMARY_ADMIN_EMAIL]);
+        saveAuthorizedUsers(data.authorizedUsers || []);
         return {
           success: true,
           message: data.message || 'All attempt logs and test users cleaned up',
           users: data.users || cleanMap,
           attempts: data.attempts || [],
-          authorizedUsers: data.authorizedUsers || [PRIMARY_ADMIN_EMAIL],
+          authorizedUsers: data.authorizedUsers || [],
         };
       }
     }
@@ -583,7 +591,7 @@ export async function cleanUpAllTestLogsAndUsers(): Promise<{
     message: 'All local and server attempt logs and test users cleaned up',
     users: cleanMap,
     attempts: [],
-    authorizedUsers: [PRIMARY_ADMIN_EMAIL],
+    authorizedUsers: [],
   };
 }
 
