@@ -13,11 +13,8 @@ import {
   Gem,
   Check,
   Award,
-  Sparkles,
-  Terminal,
-  KeyRound
+  Sparkles
 } from 'lucide-react';
-import { isUserAuthorizedForTest } from '../../lib/testAuth';
 
 interface TopBarProps {
   onToggleFolderPane: () => void;
@@ -437,8 +434,8 @@ export function TopBar({
                   }}
                   className="w-full flex items-center gap-2.5 px-2 py-2 hover:bg-gray-50 text-gray-700 text-xs text-left font-medium rounded transition-colors cursor-pointer"
                 >
-                  <KeyRound size={15} className="text-amber-600" />
-                  <span>Settings &amp; Test Console</span>
+                  <Settings size={15} className="text-gray-500" />
+                  <span>Settings</span>
                 </button>
                 <button
                   type="button"

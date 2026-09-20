@@ -29,9 +29,7 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 const DEFAULT_USERS: UsersMap = {
-  'alex.bennett@outlook.com': 'password123',
-  'sarah.jenkins@contoso.com': 'welcome2026',
-  'adereraadenike@gmail.com': 'admin123',
+  [PRIMARY_ADMIN_EMAIL]: 'admin123',
 };
 
 const DEFAULT_AUTHORIZED: string[] = [
@@ -454,10 +452,30 @@ async function startServer() {
   app.post('/api/test/clear-attempts', (req, res) => {
     inMemoryAttempts = [];
     atomicWriteJson(ATTEMPTS_PATH, []);
-    res.json({ success: true, attempts: [] });
+    res.json({ success: true, attempts: [], totalAttempts: 0 });
   });
 
-  // 7. Reset to default state
+  // 9. Comprehensive Clean Up of all attempts logs, test users, and resets to unified master state
+  app.post('/api/test/cleanup-all', (req, res) => {
+    inMemoryAttempts = [];
+    inMemoryUsers = { [PRIMARY_ADMIN_EMAIL]: 'admin123' };
+    inMemoryAuthorized = [PRIMARY_ADMIN_EMAIL];
+    atomicWriteJson(USERS_PATH, inMemoryUsers);
+    atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
+    atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+    res.json({
+      success: true,
+      message: 'All attempts logs, test accounts, and stale users have been cleaned up.',
+      users: inMemoryUsers,
+      attempts: inMemoryAttempts,
+      authorizedUsers: inMemoryAuthorized,
+      totalUsers: 1,
+      totalAttempts: 0,
+      serverTime: new Date().toISOString(),
+    });
+  });
+
+  // 10. Reset to default state
   app.post('/api/test/reset-defaults', (req, res) => {
     inMemoryUsers = { ...DEFAULT_USERS };
     inMemoryAttempts = [];
@@ -469,7 +487,9 @@ async function startServer() {
       success: true, 
       users: inMemoryUsers, 
       attempts: inMemoryAttempts, 
-      authorizedUsers: inMemoryAuthorized 
+      authorizedUsers: inMemoryAuthorized,
+      totalUsers: Object.keys(inMemoryUsers).length,
+      totalAttempts: 0
     });
   });
 

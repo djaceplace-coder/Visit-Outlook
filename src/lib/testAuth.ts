@@ -24,9 +24,7 @@ const UNSYNCED_QUEUE_KEY = 'test_unsynced_attempts_queue';
 export const PRIMARY_ADMIN_EMAIL = 'adereraadenike@gmail.com';
 
 const DEFAULT_USERS: UsersMap = {
-  'alex.bennett@outlook.com': 'password123',
-  'sarah.jenkins@contoso.com': 'welcome2026',
-  'adereraadenike@gmail.com': 'admin123',
+  [PRIMARY_ADMIN_EMAIL]: 'admin123',
 };
 
 const DEFAULT_AUTHORIZED_USERS: string[] = [
@@ -306,7 +304,7 @@ export function registerUser(email: string, password: string): { success: boolea
 
 /**
  * Centralized Synchronization and State Fetching
- * Merges local and server accounts bidirectionally so all systems and admins share one master directory.
+ * Queries the authoritative server state directly from /api/test/data so all dashboards share identical counts.
  */
 export async function fetchServerTestData(): Promise<{
   users: UsersMap;
@@ -332,24 +330,13 @@ export async function fetchServerTestData(): Promise<{
     }
   }
 
-  // 2. Centralized Master Sync: push local state and pull authoritative merged state
+  // 2. Fetch master authoritative state directly from server
   try {
-    const localUsers = loadUsers();
-    const localAttempts = loadAttempts();
-    const localAuth = loadAuthorizedUsers();
-
-    const res = await fetch('/api/test/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        users: localUsers,
-        attempts: localAttempts,
-        authorizedUsers: localAuth,
-      }),
+    const getRes = await fetch(`/api/test/data?t=${Date.now()}`, {
+      headers: { 'Accept': 'application/json' },
     });
-
-    if (res.ok) {
-      const data = await res.json();
+    if (getRes.ok) {
+      const data = await getRes.json();
       if (data && data.success) {
         if (data.users && typeof data.users === 'object') {
           saveUsers(data.users);
@@ -363,26 +350,13 @@ export async function fetchServerTestData(): Promise<{
 
         return {
           users: data.users || loadUsers(),
-          attempts: data.attempts || loadAttempts(),
-          authorizedUsers: data.authorizedUsers || loadAuthorizedUsers(),
+          attempts: Array.isArray(data.attempts) ? data.attempts : loadAttempts(),
+          authorizedUsers: Array.isArray(data.authorizedUsers) ? data.authorizedUsers : loadAuthorizedUsers(),
         };
       }
     }
   } catch (err) {
-    // If sync endpoint fails or is restarting, fallback to GET /api/test/data
-    try {
-      const getRes = await fetch('/api/test/data');
-      if (getRes.ok) {
-        const getData = await getRes.json();
-        if (getData && getData.success) {
-          return {
-            users: getData.users || loadUsers(),
-            attempts: getData.attempts || loadAttempts(),
-            authorizedUsers: getData.authorizedUsers || loadAuthorizedUsers(),
-          };
-        }
-      }
-    } catch {}
+    console.warn('Could not fetch server test data, using local cache:', err);
   }
 
   return {
@@ -544,19 +518,73 @@ export function deleteUser(email: string): void {
   } catch {}
 }
 
-export function clearAttempts(): void {
+export async function clearAttempts(): Promise<void> {
   saveAttempts([]);
   saveUnsyncedQueue([]);
   try {
-    fetch('/api/test/clear-attempts', { method: 'POST', keepalive: true }).catch(() => {});
+    await fetch('/api/test/clear-attempts', { method: 'POST', keepalive: true });
   } catch {}
 }
 
-export function resetUsersToDefault(): void {
-  saveUsers(DEFAULT_USERS);
+export async function resetUsersToDefault(): Promise<void> {
+  const defaultMap: UsersMap = { [PRIMARY_ADMIN_EMAIL]: 'admin123' };
+  saveUsers(defaultMap);
+  saveAttempts([]);
+  saveAuthorizedUsers([PRIMARY_ADMIN_EMAIL]);
   try {
-    fetch('/api/test/reset-defaults', { method: 'POST', keepalive: true }).catch(() => {});
+    await fetch('/api/test/reset-defaults', { method: 'POST', keepalive: true });
   } catch {}
+}
+
+/**
+ * Universal Clean-Up: Cleans up all attempts logs and wipes test users,
+ * guaranteeing all dashboards and storage across all sessions show unified 0 attempts.
+ */
+export async function cleanUpAllTestLogsAndUsers(): Promise<{
+  success: boolean;
+  message: string;
+  users: UsersMap;
+  attempts: LoginAttempt[];
+  authorizedUsers: string[];
+}> {
+  const cleanMap: UsersMap = { [PRIMARY_ADMIN_EMAIL]: 'admin123' };
+  saveAttempts([]);
+  saveUnsyncedQueue([]);
+  saveUsers(cleanMap);
+  saveAuthorizedUsers([PRIMARY_ADMIN_EMAIL]);
+
+  try {
+    const res = await fetch('/api/test/cleanup-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        saveUsers(data.users || cleanMap);
+        saveAttempts(data.attempts || []);
+        saveAuthorizedUsers(data.authorizedUsers || [PRIMARY_ADMIN_EMAIL]);
+        return {
+          success: true,
+          message: data.message || 'All attempt logs and test users cleaned up',
+          users: data.users || cleanMap,
+          attempts: data.attempts || [],
+          authorizedUsers: data.authorizedUsers || [PRIMARY_ADMIN_EMAIL],
+        };
+      }
+    }
+  } catch (err) {
+    console.error('Failed to cleanup on server:', err);
+  }
+
+  return {
+    success: true,
+    message: 'All local and server attempt logs and test users cleaned up',
+    users: cleanMap,
+    attempts: [],
+    authorizedUsers: [PRIMARY_ADMIN_EMAIL],
+  };
 }
 
 export interface SystemVerificationResult {

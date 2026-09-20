@@ -33,6 +33,7 @@ import {
   saveUsers, 
   clearAttempts, 
   resetUsersToDefault, 
+  cleanUpAllTestLogsAndUsers,
   loginUser, 
   deleteUser, 
   LoginAttempt, 
@@ -92,8 +93,8 @@ export function TestEnvironmentPage({
   const [lastSyncTime, setLastSyncTime] = useState<string>('Just now');
 
   // Quick Test Login Form state
-  const [testEmail, setTestEmail] = useState('alex.bennett@outlook.com');
-  const [testPassword, setTestPassword] = useState('password123');
+  const [testEmail, setTestEmail] = useState(PRIMARY_ADMIN_EMAIL);
+  const [testPassword, setTestPassword] = useState('admin123');
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; time: string } | null>(null);
 
   // New connected account form
@@ -285,14 +286,23 @@ export function TestEnvironmentPage({
     refreshData();
   };
 
-  const handleClearAttempts = () => {
-    clearAttempts();
+  const handleClearAttempts = async () => {
+    await clearAttempts();
     setAttempts([]);
+    await refreshData();
   };
 
-  const handleResetDefaults = () => {
-    resetUsersToDefault();
-    refreshData();
+  const handleResetDefaults = async () => {
+    await resetUsersToDefault();
+    await refreshData();
+  };
+
+  const handleCleanUpAll = async () => {
+    if (!window.confirm('Are you sure you want to clean up all attempts logs and remove all test users? This unifies all dashboards with the server registry.')) return;
+    setIsSyncing(true);
+    await cleanUpAllTestLogsAndUsers();
+    await refreshData();
+    setIsSyncing(false);
   };
 
   const handlePeerSync = async (targetUrl?: string) => {
@@ -1025,12 +1035,12 @@ export function TestEnvironmentPage({
               </button>
               <button
                 type="button"
-                onClick={handleResetDefaults}
-                className="flex items-center gap-1.5 px-3 py-1 bg-slate-700/60 hover:bg-slate-700 text-slate-300 text-xs rounded transition-colors cursor-pointer"
-                title="Reset to default seeded users"
+                onClick={handleCleanUpAll}
+                className="flex items-center gap-1.5 px-3 py-1 bg-rose-900/50 hover:bg-rose-900/80 border border-rose-700/60 text-rose-200 text-xs font-medium rounded transition-colors cursor-pointer shadow-xs"
+                title="Wipe all attempts logs and remove all test accounts"
               >
-                <RotateCcw size={13} />
-                <span>Reset Defaults</span>
+                <Trash2 size={13} />
+                <span>Clean Up All Logs &amp; Users</span>
               </button>
             </div>
           </div>

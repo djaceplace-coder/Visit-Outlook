@@ -19,13 +19,15 @@ import {
   Copy,
   CheckCheck,
   CheckCircle2,
-  Clock
+  Clock,
+  Trash2
 } from 'lucide-react';
 import { Density, ReadingPanePosition } from '../../types/mail';
 import {
   fetchServerTestData,
   loadUsers,
   loadAttempts,
+  cleanUpAllTestLogsAndUsers,
   unlockWithSecurityKey,
   lockTestConsole,
   isSessionKeyUnlocked,
@@ -85,6 +87,25 @@ export function SettingsPanel({
   const [isFetchingData, setIsFetchingData] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<string>('Just now');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [isCleaning, setIsCleaning] = useState(false);
+  const [cleanMessage, setCleanMessage] = useState<string | null>(null);
+
+  const handleCleanUpAll = async () => {
+    if (!window.confirm('Are you sure you want to clean up all attempt logs and reset test users? This clears all logs across all dashboards.')) return;
+    setIsCleaning(true);
+    setCleanMessage(null);
+    try {
+      const res = await cleanUpAllTestLogsAndUsers();
+      setUsers(res.users);
+      setAttempts(res.attempts);
+      setCleanMessage('All attempt logs and test users have been cleaned up.');
+      setTimeout(() => setCleanMessage(null), 4000);
+    } catch {
+      setCleanMessage('Failed to clean up test data.');
+    } finally {
+      setIsCleaning(false);
+    }
+  };
 
   // Sync authorization status when panel opens
   useEffect(() => {
@@ -617,7 +638,7 @@ export function SettingsPanel({
                         {accountsList.length}
                       </div>
                       <div className="text-[10px] text-gray-600 mt-0.5">
-                        Saved in users.json
+                        Unified users.json
                       </div>
                     </div>
 
@@ -630,9 +651,27 @@ export function SettingsPanel({
                         {attempts.length}
                       </div>
                       <div className="text-[10px] text-gray-600 mt-0.5">
-                        Continuous Funnel Active
+                        Authoritative attempts.json
                       </div>
                     </div>
+                  </div>
+
+                  {/* Clean Up Action */}
+                  <div className="space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={handleCleanUpAll}
+                      disabled={isCleaning}
+                      className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 rounded text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <Trash2 size={13} className={isCleaning ? 'animate-spin' : ''} />
+                      <span>{isCleaning ? 'Cleaning Up Logs & Users...' : 'Clean Up All Logs & Test Users'}</span>
+                    </button>
+                    {cleanMessage && (
+                      <div className="p-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded text-center text-xs">
+                        {cleanMessage}
+                      </div>
+                    )}
                   </div>
 
                   {/* Sub-tabs: Recent Attempts vs Captured Accounts */}
