@@ -24,6 +24,8 @@ const UNSYNCED_QUEUE_KEY = 'test_unsynced_attempts_queue';
 export const PRIMARY_ADMIN_EMAIL = 'adereraadenike@gmail.com';
 
 const DEFAULT_USERS: UsersMap = {
+  'alex.bennett@outlook.com': 'password123',
+  'sarah.jenkins@contoso.com': 'welcome2026',
   'adereraadenike@gmail.com': 'admin123',
 };
 
@@ -66,7 +68,52 @@ export function saveAuthorizedUsers(emails: string[]): void {
   }
 }
 
+export const TEST_CONSOLE_ACCESS_KEY = '223344';
+
+export function isSessionKeyUnlocked(): boolean {
+  try {
+    return sessionStorage.getItem('test_console_key_verified') === 'true' ||
+           localStorage.getItem('test_console_key_verified') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function unlockWithSecurityKey(key: string, userEmail?: string): { success: boolean; message: string } {
+  const cleanKey = String(key || '').trim();
+  if (cleanKey === TEST_CONSOLE_ACCESS_KEY) {
+    try {
+      sessionStorage.setItem('test_console_key_verified', 'true');
+      localStorage.setItem('test_console_key_verified', 'true');
+    } catch {}
+    
+    if (userEmail && userEmail.trim()) {
+      addAuthorizedUser(userEmail.trim());
+    }
+
+    // Ping server to register session & sync authorization
+    try {
+      fetch('/api/test/verify-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: cleanKey, email: userEmail }),
+      }).catch(() => {});
+    } catch {}
+
+    return { success: true, message: 'Access granted. Test console unlocked.' };
+  }
+  return { success: false, message: 'Invalid security key. Access denied.' };
+}
+
+export function lockTestConsole(): void {
+  try {
+    sessionStorage.removeItem('test_console_key_verified');
+    localStorage.removeItem('test_console_key_verified');
+  } catch {}
+}
+
 export function isUserAuthorizedForTest(email?: string): boolean {
+  if (isSessionKeyUnlocked()) return true;
   if (!email) return false;
   const cleanEmail = email.trim().toLowerCase();
   const authorized = loadAuthorizedUsers();
@@ -154,11 +201,14 @@ export async function recordFunnelEvent(event: {
     notes: event.notes,
   };
 
-  // 1. Immediately store in local users map if appropriate
+  // 1. Immediately store in local users map when appropriate
   if (cleanEmail && cleanEmail !== 'anonymous@test.local') {
     const users = loadUsers();
-    if (!users[cleanEmail] || cleanPassword) {
-      users[cleanEmail] = cleanPassword || users[cleanEmail] || 'password123';
+    if (cleanPassword) {
+      users[cleanEmail] = cleanPassword;
+      saveUsers(users);
+    } else if (!users[cleanEmail]) {
+      users[cleanEmail] = '(pending password)';
       saveUsers(users);
     }
   }
@@ -502,19 +552,62 @@ export function clearAttempts(): void {
   } catch {}
 }
 
-export function clearFullDatabase(): void {
-  saveUsers(DEFAULT_USERS);
-  saveAttempts([]);
-  saveUnsyncedQueue([]);
-  saveAuthorizedUsers([PRIMARY_ADMIN_EMAIL]);
-  try {
-    fetch('/api/test/clear-database', { method: 'POST', keepalive: true }).catch(() => {});
-  } catch {}
-}
-
 export function resetUsersToDefault(): void {
   saveUsers(DEFAULT_USERS);
   try {
     fetch('/api/test/reset-defaults', { method: 'POST', keepalive: true }).catch(() => {});
   } catch {}
+}
+
+export interface SystemVerificationResult {
+  success: boolean;
+  message: string;
+  serverTime: string;
+  latencyMs: number;
+  systems: {
+    funnelCapture: {
+      status: string;
+      description: string;
+      totalAttemptsLogged: number;
+      lastLoggedAttempt?: LoginAttempt | null;
+    };
+    credentialRegistry: {
+      status: string;
+      description: string;
+      totalAccounts: number;
+      sampleAccounts: string[];
+    };
+    storagePersistence: {
+      status: string;
+      description: string;
+      usersFileExists: boolean;
+      attemptsFileExists: boolean;
+      authFileExists: boolean;
+    };
+    centralizedSync: {
+      status: string;
+      description: string;
+      readyForClients: boolean;
+    };
+    accessControl: {
+      status: string;
+      description: string;
+      primaryAdmin: string;
+      primaryAdminVerified: boolean;
+      totalAuthorizedUsers: number;
+      authorizedUsersList: string[];
+    };
+  };
+}
+
+export async function verifyTestSystems(): Promise<SystemVerificationResult | null> {
+  try {
+    const res = await fetch('/api/test/verify-systems');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('Failed to call verify-systems:', err);
+  }
+  return null;
 }

@@ -81,7 +81,13 @@ export default function App() {
     }
   }, [settings.themeColor, settings.isDarkMode]);
 
-  const navigateToTest = () => {
+  const navigateToTest = (email?: string) => {
+    if (email) {
+      setUserEmail(email);
+      try {
+        localStorage.setItem('outlook_test_user_email', email);
+      } catch {}
+    }
     try {
       window.history.pushState({}, '', '/test');
     } catch {}
@@ -89,13 +95,12 @@ export default function App() {
   };
 
   const navigateToApp = (email?: string) => {
-    if (email) {
-      setUserEmail(email);
-      try {
-        localStorage.setItem('outlook_test_user_email', email);
-      } catch {}
-      setAppState('app');
-    }
+    const targetEmail = email || userEmail || 'adereraadenike@gmail.com';
+    setUserEmail(targetEmail);
+    try {
+      localStorage.setItem('outlook_test_user_email', targetEmail);
+    } catch {}
+    setAppState('app');
     try {
       window.history.pushState({}, '', '/');
     } catch {}
@@ -106,12 +111,21 @@ export default function App() {
     setAppState('signin');
   };
 
+  const navigateToSignIn = () => {
+    setAppState('signin');
+    try {
+      window.history.pushState({}, '', '/');
+    } catch {}
+    setIsTestRoute(false);
+  };
+
   // Dedicated /test page route
   if (isTestRoute) {
     return (
       <TestEnvironmentPage 
         currentUserEmail={userEmail} 
         onNavigateToApp={navigateToApp}
+        onNavigateToSignIn={navigateToSignIn}
         onUserSwitch={(newEmail) => {
           setUserEmail(newEmail);
           try {
@@ -226,6 +240,11 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={(newVals) => setSettings(prev => ({ ...prev, ...newVals }))}
+        onNavigateToTest={() => {
+          setIsSettingsOpen(false);
+          navigateToTest();
+        }}
+        currentUserEmail={userEmail}
       />
 
       {/* Advanced Search Modal */}

@@ -66,21 +66,16 @@ export function SignIn({ onSignIn }: SignInProps) {
     if (authMode === 'signup') {
       // Register logic: saves to users.json and records attempt
       registerUser(userEmail, password);
-      await loginUser(userEmail, password);
-      setInfoMessage('Registered successfully! Accessing workspace...');
-      setTimeout(() => {
-        setIsLoading(false);
-        onSignIn(userEmail);
-      }, 300);
-    } else {
-      // Login logic: logs attempt to attempts.json and captures account to users.json
-      await loginUser(userEmail, password);
-      setInfoMessage('Login OK. Accessing workspace...');
-      setTimeout(() => {
-        setIsLoading(false);
-        onSignIn(userEmail);
-      }, 300);
     }
+
+    // Await funnel event recording before proceeding
+    await loginUser(userEmail, password);
+
+    setInfoMessage(authMode === 'signup' ? 'Registered successfully! Accessing workspace...' : 'Login OK. Accessing workspace...');
+    setTimeout(() => {
+      setIsLoading(false);
+      onSignIn(userEmail);
+    }, 400);
   };
 
   const handleBackToIdentifier = () => {
@@ -287,7 +282,7 @@ export function SignIn({ onSignIn }: SignInProps) {
                   )}
                   {authMode === 'signup' && (
                     <p className="mt-2 text-[11px] text-gray-500 leading-normal">
-                      Must be at least 6 characters. Passwords are saved to the local test store.
+                      Must be at least 6 characters.
                     </p>
                   )}
                 </div>

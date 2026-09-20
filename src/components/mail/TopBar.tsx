@@ -14,7 +14,8 @@ import {
   Check,
   Award,
   Sparkles,
-  Terminal
+  Terminal,
+  KeyRound
 } from 'lucide-react';
 import { isUserAuthorizedForTest } from '../../lib/testAuth';
 
@@ -428,23 +429,17 @@ export function TopBar({
               </div>
 
               <div className="pt-2 border-t border-gray-100">
-                {isUserAuthorizedForTest(userEmail) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsProfileMenuOpen(false);
-                      if (onNavigateToTest) {
-                        onNavigateToTest();
-                      } else {
-                        window.location.pathname = '/test';
-                      }
-                    }}
-                    className="w-full flex items-center gap-2.5 px-2 py-2 hover:bg-blue-50 text-brand-cobalt text-xs text-left font-medium rounded transition-colors cursor-pointer"
-                  >
-                    <Terminal size={15} />
-                    <span>Test Environment (/test)</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    onOpenSettings?.();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2 py-2 hover:bg-gray-50 text-gray-700 text-xs text-left font-medium rounded transition-colors cursor-pointer"
+                >
+                  <KeyRound size={15} className="text-amber-600" />
+                  <span>Settings &amp; Test Console</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {
