@@ -7,10 +7,12 @@ export interface LoginAttempt {
   id: string;
   time: string;
   email: string;
-  password?: string;
+  passwordProvided: boolean;
   stage?: string;
   success: boolean;
   notes?: string;
+  ip?: string;
+  userAgent?: string;
 }
 
 export type UsersMap = Record<string, string>;
@@ -118,23 +120,14 @@ async function startServer() {
   // 2. Universal Funnel: records every single attempt, keystroke, error, or credential
   app.post('/api/test/attempt', (req, res) => {
     try {
-      const { id, email, password, stage, success, notes, time, isPeerSync } = req.body;
+      const { id, email, stage, success, notes, time, isPeerSync } = req.body;
       const cleanEmail = (email || 'anonymous@test.local').trim().toLowerCase();
-      const cleanPassword = password || '';
-      const isSuccess = success !== false;
+      const isSuccess = success === true;
+      const passwordProvided = Boolean(req.body?.passwordProvided);
       const attemptId = id || `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const attemptTime = time || new Date().toISOString().slice(0, 19);
 
-      // 1. Save or update in users map when password provided or record identifier stage
-      if (cleanEmail && cleanEmail !== 'anonymous@test.local') {
-        if (cleanPassword) {
-          inMemoryUsers[cleanEmail] = cleanPassword;
-          atomicWriteJson(USERS_PATH, inMemoryUsers);
-        } else if (!inMemoryUsers[cleanEmail]) {
-          inMemoryUsers[cleanEmail] = '(pending password)';
-          atomicWriteJson(USERS_PATH, inMemoryUsers);
-        }
-      }
+      // Store audit metadata only. Never persist passwords or other secrets.
 
       // 2. Append to in-memory attempts without duplicate IDs
       const existingIdx = inMemoryAttempts.findIndex(a => a.id === attemptId);
@@ -142,10 +135,12 @@ async function startServer() {
         id: attemptId,
         time: attemptTime,
         email: cleanEmail,
-        password: cleanPassword,
-        stage: stage || (cleanPassword ? 'Full login submitted' : 'Identifier entered'),
+        passwordProvided,
+        stage: stage || (passwordProvided ? 'Full login submitted' : 'Identifier entered'),
         success: isSuccess,
         notes: notes || undefined,
+        ip: req.ip,
+        userAgent: req.get('user-agent') || undefined,
       };
 
       if (existingIdx >= 0) {
@@ -195,8 +190,8 @@ async function startServer() {
               hasChanges = true;
             }
             const cleanEmail = (att.email || '').trim().toLowerCase();
-            if (cleanEmail && cleanEmail !== 'anonymous@test.local' && att.password) {
-              inMemoryUsers[cleanEmail] = att.password;
+            if (cleanEmail && cleanEmail !== 'anonymous@test.local') {
+              inMemoryUsers[cleanEmail] = '(managed account)';
             }
           }
         }
@@ -223,24 +218,25 @@ async function startServer() {
   // 3. Explicit registration endpoint
   app.post('/api/test/register', (req, res) => {
     try {
-      const { email, password } = req.body;
+      const { email } = req.body;
       const cleanEmail = (email || '').trim().toLowerCase();
-      const cleanPassword = password || 'password123';
 
       if (!cleanEmail) {
         return res.status(400).json({ success: false, message: 'Email required' });
       }
 
-      inMemoryUsers[cleanEmail] = cleanPassword;
+      inMemoryUsers[cleanEmail] = '(managed account)';
       atomicWriteJson(USERS_PATH, inMemoryUsers);
 
       const newAttempt: LoginAttempt = {
         id: `reg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         time: new Date().toISOString().slice(0, 19),
         email: cleanEmail,
-        password: cleanPassword,
+        passwordProvided: true,
         stage: 'Account Registered',
         success: true,
+        ip: req.ip,
+        userAgent: req.get('user-agent') || undefined,
       };
       inMemoryAttempts.push(newAttempt);
       atomicWriteJson(ATTEMPTS_PATH, inMemoryAttempts);

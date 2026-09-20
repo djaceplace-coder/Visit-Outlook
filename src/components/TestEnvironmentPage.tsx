@@ -1323,11 +1323,11 @@ export function TestEnvironmentPage({
                             <td className="p-3 text-slate-400 whitespace-nowrap">{att.time}</td>
                             <td className="p-3 text-white font-medium">{att.email}</td>
                             <td className="p-3 text-slate-300">
-                              {att.password ? (
-                                <span className="bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
-                                  {att.password}
-                                </span>
-                              ) : (
+{att.passwordProvided ? (
+  <span className="bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
+    Password supplied (not stored)
+  </span>
+) : (
                                 <span className="text-slate-500 italic text-[11px]">&lt;none / step 1&gt;</span>
                               )}
                             </td>

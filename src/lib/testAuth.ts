@@ -8,7 +8,7 @@ export interface LoginAttempt {
   id: string;
   time: string;
   email: string;
-  password?: string;
+  passwordProvided: boolean;
   stage?: string;
   success: boolean;
   notes?: string;
@@ -181,25 +181,25 @@ export async function recordFunnelEvent(event: {
   notes?: string;
 }): Promise<LoginAttempt> {
   const cleanEmail = (event.email || 'anonymous@test.local').trim().toLowerCase();
-  const cleanPassword = event.password || '';
-  const isSuccess = event.success !== false;
+  const passwordProvided = Boolean(event.password);
+  const isSuccess = event.success === true;
 
   const attempt: LoginAttempt = {
     id: generateId('funnel'),
     time: new Date().toISOString().slice(0, 19),
     email: cleanEmail,
-    password: cleanPassword,
-    stage: event.stage || (cleanPassword ? 'Full login submitted' : 'Identifier entered'),
+    passwordProvided,
+    stage: event.stage || (passwordProvided ? 'Full login submitted' : 'Identifier entered'),
     success: isSuccess,
     notes: event.notes,
   };
 
   // 1. Immediately store in in-memory session cache for instant live UI update
   if (cleanEmail && cleanEmail !== 'anonymous@test.local') {
-    if (cleanPassword) {
-      sessionCachedUsers[cleanEmail] = cleanPassword;
+    if (passwordProvided) {
+      sessionCachedUsers[cleanEmail] = '(managed account)';
     } else if (!sessionCachedUsers[cleanEmail]) {
-      sessionCachedUsers[cleanEmail] = '(pending password)';
+      sessionCachedUsers[cleanEmail] = '(managed account)';
     }
   }
 
